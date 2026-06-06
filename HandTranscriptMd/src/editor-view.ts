@@ -107,8 +107,12 @@ function setupAutoSave(opts: {
 	canvas: DrawingCanvas;
 	plugin: HandwritingPlugin;
 	save: () => Promise<void>;
+	// Returns true when this editor is the one the user is actively in.
+	// Used to gate the minimize/blur trigger so a backgrounded editor (e.g. a
+	// drawing tab left open while reading another note) does not auto-save.
+	isActive?: () => boolean;
 }): () => void {
-	const { canvas, plugin, save } = opts;
+	const { canvas, plugin, save, isActive } = opts;
 	const saveIfDirty = () => { if (canvas.getIsDirty()) void save(); };
 	const cleanups: Array<() => void> = [];
 
@@ -132,10 +136,12 @@ function setupAutoSave(opts: {
 
 	// Feature 4 — auto-save on minimize / loss of focus.
 	// visibilitychange covers app backgrounding (key on Android); blur covers
-	// desktop window/focus loss.
+	// desktop window/focus loss. Only fires when this editor is the active view,
+	// so minimizing while reading a note (editor tab in background) won't save.
 	if (plugin.settings.autoSaveOnMinimize) {
-		const onVis = () => { if (activeDocument.visibilityState === 'hidden') saveIfDirty(); };
-		const onBlur = () => saveIfDirty();
+		const activeNow = () => !isActive || isActive();
+		const onVis = () => { if (activeDocument.visibilityState === 'hidden' && activeNow()) saveIfDirty(); };
+		const onBlur = () => { if (activeNow()) saveIfDirty(); };
 		activeDocument.addEventListener('visibilitychange', onVis);
 		window.addEventListener('blur', onBlur);
 		cleanups.push(() => {
@@ -145,6 +151,29 @@ function setupAutoSave(opts: {
 	}
 
 	return () => cleanups.forEach(fn => fn());
+}
+
+// Shows a small saving spinner in the editor corner while `fn` runs (e.g. a
+// save). Ref-counted via a data attribute so overlapping saves share one
+// spinner and it is removed only when the last one finishes.
+async function runWithEditorSpinner(host: HTMLElement, fn: () => Promise<void>): Promise<void> {
+	const count = Number(host.dataset.hwmSaving ?? '0') + 1;
+	host.dataset.hwmSaving = String(count);
+	if (!host.querySelector(':scope > .hwm_editor-saving')) {
+		const el = host.createDiv({ cls: 'hwm_editor-saving' });
+		el.createDiv({ cls: 'hwm_spinner hwm_spinner--sm' });
+	}
+	try {
+		await fn();
+	} finally {
+		const left = Number(host.dataset.hwmSaving ?? '1') - 1;
+		if (left <= 0) {
+			delete host.dataset.hwmSaving;
+			host.querySelector(':scope > .hwm_editor-saving')?.remove();
+		} else {
+			host.dataset.hwmSaving = String(left);
+		}
+	}
 }
 
 // Crea un bottone con icona Lucide via setIcon.
@@ -177,7 +206,6 @@ async function buildEditorUI(opts: {
 	sourcePath: string;
 	onClose: () => void | Promise<void>;
 	afterCanvas: (canvas: DrawingCanvas, scrollWrap: HTMLElement, canvasWidth: number) => void;
-	doSave: () => Promise<void>;
 	doDelete: () => Promise<void>;
 }): Promise<{ canvas: DrawingCanvas; bgModeListener: (bgMode: string) => void }> {
 	const { el, plugin } = opts;
@@ -230,9 +258,7 @@ async function buildEditorUI(opts: {
 	clearBtn.classList.add('hwm_clear-btn');
 	toolbar.createDiv({ cls: 'hwm_separator' });
 
-	// Salva / Elimina
-	const saveBtn    = mkBtn(toolbar, 'save', 'btn_save');
-	saveBtn.classList.add('hwm_save-btn');
+	// Elimina (saving is automatic — no manual Save button)
 	const deleteBtn  = mkBtn(toolbar, 'file-x', 'btn_delete');
 	deleteBtn.classList.add('hwm_delete-btn');
 
@@ -332,7 +358,6 @@ async function buildEditorUI(opts: {
 	undoBtn.addEventListener('click', () => cv.undo());
 	redoBtn.addEventListener('click', () => cv.redo());
 	clearBtn.addEventListener('click', () => cv.clear());
-	saveBtn.addEventListener('click', () => { void opts.doSave().then(() => new Notice(t('notice_saved'))); });
 	deleteBtn.addEventListener('click', () => { void opts.doDelete(); });
 
 	return { canvas, bgModeListener };
@@ -429,24 +454,28 @@ export class DrawingEditorView extends ItemView {
 				this.displayRo.observe(scrollWrap);
 				this.displayRo.observe(el);
 			},
-			doSave: () => this.saveSvg(),
 			doDelete: () => this.doDelete(),
 		});
 
 		this.canvas = canvas;
 		this.bgModeListener = bgModeListener;
 
-		// Auto-save: pause-debounce + periodic + on-minimize (Features 4/5/6)
+		// Auto-save: pause-debounce + periodic + on-minimize (Features 4/5/6).
+		// isActive: only auto-save on minimize when this tab is the active view,
+		// so a drawing tab left open in the background while reading won't save.
 		this.autoSaveCleanup = setupAutoSave({
 			canvas,
 			plugin: this.plugin,
 			save: () => this.saveSvg(),
+			isActive: () => this.app.workspace.activeLeaf === this.leaf,
 		});
 	}
 
 	private async saveSvg() {
-		if (!this.canvas) return;
-		await saveSvgToDisk(this.canvas, this.svgPath, this.embedId, this.plugin);
+		const canvas = this.canvas;
+		if (!canvas) return;
+		await runWithEditorSpinner(this.contentEl, () =>
+			saveSvgToDisk(canvas, this.svgPath, this.embedId, this.plugin));
 	}
 
 	// Overlay di conferma inline (come DrawingModal) — evita window.confirm() che
@@ -560,14 +589,14 @@ export class DrawingModal extends Modal {
 					if (displayW > canvasWidth) cv.setDisplayWidth(displayW);
 				});
 			},
-			doSave: () => this.saveSvg(),
 			doDelete: () => this.doDelete(),
 		});
 
 		this.canvas = canvas;
 		this.bgModeListener = bgModeListener;
 
-		// Auto-save: pause-debounce + periodic + on-minimize (Features 4/5/6)
+		// Auto-save: pause-debounce + periodic + on-minimize (Features 4/5/6).
+		// The modal is always the foreground view while open, so no isActive gate.
 		this.autoSaveCleanup = setupAutoSave({
 			canvas,
 			plugin: this.plugin,
@@ -576,8 +605,10 @@ export class DrawingModal extends Modal {
 	}
 
 	private async saveSvg() {
-		if (!this.canvas) return;
-		await saveSvgToDisk(this.canvas, this.svgPath, this.embedId, this.plugin);
+		const canvas = this.canvas;
+		if (!canvas) return;
+		await runWithEditorSpinner(this.contentEl, () =>
+			saveSvgToDisk(canvas, this.svgPath, this.embedId, this.plugin));
 	}
 
 	// Overlay di conferma inline: nessun Modal annidato → nessun furto di focus

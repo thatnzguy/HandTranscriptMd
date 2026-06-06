@@ -778,16 +778,14 @@ function createPortalPanel(
 		if (isExpanded) doCollapse(); else doExpand();
 	});
 
-	// Background OCR loading indicator: a small spinner shown in the embed
-	// corner while auto-OCR runs (triggered from main.ts handleSvgSave).
-	// Hides the portal panel while active and restores its previous state after.
+	// Background OCR loading indicator: a small spinner shown in the embed's
+	// bottom-right corner while auto-OCR runs (triggered from main.ts handleSvgSave).
+	// Independent of the hover toolbar/panel — it stays visible for the whole OCR
+	// run regardless of whether the portal panel is shown.
 	let ocrLoadingEl: HTMLElement | null = null;
-	let ocrPanelWasHidden = false;
 	const setLoading = (loading: boolean) => {
 		if (loading) {
 			if (ocrLoadingEl) return;
-			ocrPanelWasHidden = panel.classList.contains('hwm_hidden');
-			panel.classList.add('hwm_hidden');
 			ocrLoadingEl = activeDocument.createElement('div');
 			ocrLoadingEl.className = 'hwm_ocr-loading';
 			const spinner = activeDocument.createElement('div');
@@ -796,15 +794,10 @@ function createPortalPanel(
 			container.appendChild(ocrLoadingEl);
 		} else {
 			if (ocrLoadingEl) { ocrLoadingEl.remove(); ocrLoadingEl = null; }
-			// Only restore the panel if it wasn't already hidden for another reason
-			// (modal open, mobile editor tab open).
-			if (!ocrPanelWasHidden && container.isConnected && !modalOpen) {
-				panel.classList.remove('hwm_hidden');
-			}
 		}
 	};
 
-	// Registra le azioni nel plugin per il menu "⋮ Espandi/Collassa/Converti tutti"
+	// Registra le azioni nel plugin per il menu "⋮ Espandi/Collassa"
 	plugin.embedActions.set(embedId, { expand: doExpand, collapse: doCollapse, setLoading, container, sourcePath });
 	plugin.register(() => plugin.embedActions.delete(embedId));
 

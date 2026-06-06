@@ -967,3 +967,18 @@
 	height: 18px;
 	border-width: 2px;
 }
+
+/* Saving spinner shown in the drawing editor (modal + tab) while a save runs */
+.hwm_editor-saving {
+	position: absolute;
+	top: 10px;
+	left: 10px;
+	z-index: 1001;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 4px;
+	background: rgba(0, 0, 0, 0.35);
+	border-radius: 6px;
+	pointer-events: none;
+}
