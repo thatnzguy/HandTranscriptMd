@@ -801,6 +801,25 @@ function createPortalPanel(
 	plugin.embedActions.set(embedId, { expand: doExpand, collapse: doCollapse, setLoading, container, sourcePath });
 	plugin.register(() => plugin.embedActions.delete(embedId));
 
+	// Mobile: reveal the toolbar on tap of the block, hide it when tapping
+	// elsewhere. On touch devices the embed span has pointer-events:none (for the
+	// Android stylus), so detect taps at the document level and test the embed's
+	// bounding box. Desktop uses CSS :hover instead (see styles.css).
+	if (Platform.isMobile) {
+		const onDocPointer = (e: PointerEvent) => {
+			if (!container.isConnected) {
+				activeDocument.removeEventListener('pointerdown', onDocPointer, true);
+				return;
+			}
+			const rect = container.getBoundingClientRect();
+			const inside = e.clientX >= rect.left && e.clientX <= rect.right &&
+				e.clientY >= rect.top && e.clientY <= rect.bottom;
+			container.classList.toggle('hwm_panel-revealed', inside);
+		};
+		activeDocument.addEventListener('pointerdown', onDocPointer, true);
+		plugin.register(() => activeDocument.removeEventListener('pointerdown', onDocPointer, true));
+	}
+
 	// Layout-change: su Mobile nasconde il pannello quando la tab editor è aperta
 	const onLayoutChange = () => {
 		if (!container.isConnected) {

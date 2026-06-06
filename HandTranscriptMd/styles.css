@@ -45,6 +45,14 @@
 	position: relative;
 	pointer-events: none;
 }
+/* Desktop (hover-capable): let the embed receive hover so the toolbar can be
+   revealed on hover. pointer-events:none above is only needed for the Android
+   stylus, which is a touch (no-hover) device. */
+@media (hover: hover) {
+	.internal-embed[data-hwm-decorated="1"] {
+		pointer-events: auto;
+	}
+}
 
 /* --- Container principale dell'embed --- */
 .hwm_container {
@@ -542,8 +550,22 @@
 	border-radius: var(--radius-m);
 	background: rgba(240, 240, 240, 0.95);
 	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15);
-	/* Lo span padre ha pointer-events:none (per handwriting Android):
-	   ripristina i click sui bottoni del pannello */
+	/* Hidden by default — revealed on hover (desktop) or tap (mobile).
+	   pointer-events:none while hidden so it can't be clicked invisibly. */
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 0.15s ease;
+}
+/* Desktop: reveal the toolbar when hovering the embed */
+@media (hover: hover) {
+	.internal-embed[data-hwm-decorated="1"]:hover .hwm_portal-panel {
+		opacity: 1;
+		pointer-events: auto;
+	}
+}
+/* Mobile/touch: reveal after the block is tapped (class toggled in JS) */
+.internal-embed.hwm_panel-revealed .hwm_portal-panel {
+	opacity: 1;
 	pointer-events: auto;
 }
 /* Tema scuro del pannello portale (classe aggiunta via JS in base a bgMode) */
