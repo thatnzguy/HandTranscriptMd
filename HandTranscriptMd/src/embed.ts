@@ -471,6 +471,26 @@ function escapeRegex(s: string): string {
    Elimina embed
    ============================================= */
 
+// After removing/discarding an embed via vault.modify, the Live Preview editor
+// can lose focus and appear unresponsive ("uneditable") until the user clicks
+// back into it. Refocus the CM6 content of the source note to restore editing.
+// Mirrors the refocus logic in editor-view.ts doDelete().
+function refocusMarkdownView(plugin: HandwritingPlugin, sourcePath: string): void {
+	window.setTimeout(() => {
+		const ws = plugin.app.workspace;
+		let mdView = ws.getActiveViewOfType(MarkdownView);
+		if (!mdView || mdView.file?.path !== sourcePath) {
+			const leaf = ws.getLeavesOfType('markdown')
+				.find(l => (l.view as MarkdownView).file?.path === sourcePath);
+			if (leaf) ws.setActiveLeaf(leaf, { focus: true });
+			mdView = ws.getActiveViewOfType(MarkdownView);
+		}
+		// Focus the CM6 contenteditable directly so typing works again
+		const cm = mdView?.contentEl.querySelector<HTMLElement>('.cm-content');
+		cm?.focus();
+	}, 200);
+}
+
 // Removes a transcript callout that immediately follows ![[svgPath]],
 // keeping the embed line itself. Returns the updated content.
 function removeTranscriptBlock(content: string, svgPath: string): string {
@@ -501,6 +521,7 @@ async function removeWikiEmbed(
 	const svgFile = plugin.app.vault.getAbstractFileByPath(svgPath);
 	if (svgFile instanceof TFile) await plugin.app.fileManager.trashFile(svgFile);
 
+	refocusMarkdownView(plugin, sourcePath);
 	new Notice(t('notice_deleted'));
 }
 
@@ -522,6 +543,7 @@ async function discardDrawingKeepTranscript(
 	const svgFile = plugin.app.vault.getAbstractFileByPath(svgPath);
 	if (svgFile instanceof TFile) await plugin.app.fileManager.trashFile(svgFile);
 
+	refocusMarkdownView(plugin, sourcePath);
 	new Notice('Drawing discarded — transcript kept');
 }
 
