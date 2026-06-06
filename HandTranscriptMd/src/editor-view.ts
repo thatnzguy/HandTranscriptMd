@@ -176,6 +176,21 @@ async function runWithEditorSpinner(host: HTMLElement, fn: () => Promise<void>):
 	}
 }
 
+// Inline confirmation overlay for destructive actions inside the editor.
+// Uses the same .hwm_confirm-overlay pattern as the delete confirm; avoids
+// window.confirm() (which steals focus in Electron). Resolves true on confirm.
+function showEditorConfirm(host: HTMLElement, msg: string, okLabel: string): Promise<boolean> {
+	return new Promise(resolve => {
+		const overlay = host.createDiv({ cls: 'hwm_confirm-overlay' });
+		overlay.createEl('span', { text: msg, cls: 'hwm_confirm-msg' });
+		const okBtn = overlay.createEl('button', { text: okLabel, cls: 'mod-warning' });
+		const cancelBtn = overlay.createEl('button', { text: t('confirm_cancel') });
+		okBtn.addEventListener('click', () => { overlay.remove(); resolve(true); });
+		cancelBtn.addEventListener('click', () => { overlay.remove(); resolve(false); });
+		okBtn.focus();
+	});
+}
+
 // Crea un bottone con icona Lucide via setIcon.
 // Funzione standalone (non metodo) — usata da entrambe le classi editor.
 function mkBtn(parent: HTMLElement, icon: string, key: I18nKey): HTMLElement {
@@ -357,7 +372,11 @@ async function buildEditorUI(opts: {
 	}
 	undoBtn.addEventListener('click', () => cv.undo());
 	redoBtn.addEventListener('click', () => cv.redo());
-	clearBtn.addEventListener('click', () => cv.clear());
+	clearBtn.addEventListener('click', () => { void (async () => {
+		if (cv.getStrokes().length === 0) return; // nothing to clear
+		if (!await showEditorConfirm(el, 'Clear the whole drawing?', t('btn_clear'))) return;
+		cv.clear();
+	})(); });
 	deleteBtn.addEventListener('click', () => { void opts.doDelete(); });
 
 	return { canvas, bgModeListener };
