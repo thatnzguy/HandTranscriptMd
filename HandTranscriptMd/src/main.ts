@@ -182,20 +182,21 @@ export default class HandwritingPlugin extends Plugin {
 		if (!this.settings.geminiApiKey.trim()) return;
 		if (this.processingFiles.has(file.path)) return;
 
-		const content = await this.app.vault.read(file);
-		const embedRegex = /!\[\[(_handwriting\/[^\]]+\.svg)\]\]/g;
-		const toProcess: string[] = [];
-		let m: RegExpExecArray | null;
-		while ((m = embedRegex.exec(content)) !== null) {
-			const svgPath = m[1]!;
-			if (!findTranscript(content, svgPath)) toProcess.push(svgPath);
-		}
-		if (toProcess.length === 0) return;
+		this.processingFiles.add(file.path);
+		try {
+			const content = (await this.app.vault.read(file)).replace(/\r\n/g, '\n');
+			const embedRegex = /!\[\[(_handwriting\/[^\]]+\.svg)\]\]/g;
+			const toProcess: string[] = [];
+			let m: RegExpExecArray | null;
+			while ((m = embedRegex.exec(content)) !== null) {
+				const svgPath = m[1]!;
+				if (!findTranscript(content, svgPath)) toProcess.push(svgPath);
+			}
+			if (toProcess.length === 0) return;
 
-		let updated = content;
-		let count = 0;
-		for (const svgPath of toProcess) {
-			try {
+			let updated = content;
+			let count = 0;
+			for (const svgPath of toProcess) {
 				const svgFile = this.app.vault.getAbstractFileByPath(svgPath);
 				if (!(svgFile instanceof TFile)) continue;
 				const svgContent = await this.app.vault.read(svgFile);
@@ -203,19 +204,14 @@ export default class HandwritingPlugin extends Plugin {
 				if (!ocrText) continue;
 				updated = insertTranscript(updated, svgPath, ocrText);
 				count++;
-			} catch {
-				// Skip this embed silently — don't block the rest
 			}
-		}
 
-		if (count > 0) {
-			this.processingFiles.add(file.path);
-			try {
+			if (count > 0) {
 				await this.app.vault.modify(file, updated);
-			} finally {
-				this.processingFiles.delete(file.path);
+				new Notice(`Added ${count} transcript${count > 1 ? 's' : ''}`);
 			}
-			new Notice(`Added ${count} transcript${count > 1 ? 's' : ''}`);
+		} finally {
+			this.processingFiles.delete(file.path);
 		}
 	}
 

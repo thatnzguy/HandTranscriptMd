@@ -964,13 +964,17 @@ function createBtn(parent: HTMLElement, icon: string, key: I18nKey): HTMLElement
  * when no text is recognized.
  */
 export async function runOcrRaw(svgContent: string, plugin: HandwritingPlugin): Promise<string> {
-	const svgEl = new DOMParser()
-		.parseFromString(svgContent, 'image/svg+xml')
-		.documentElement as unknown as SVGElement;
-	const base64 = await svgToBase64Png(svgEl);
-	const recognizer = getRecognizer(plugin.settings.geminiApiKey, plugin.settings.ocrLanguages);
-	const rawText = await recognizer.recognize(base64);
-	return rawText.trim();
+	try {
+		const svgEl = new DOMParser()
+			.parseFromString(svgContent, 'image/svg+xml')
+			.documentElement as unknown as SVGElement;
+		const base64 = await svgToBase64Png(svgEl);
+		const recognizer = getRecognizer(plugin.settings.geminiApiKey, plugin.settings.ocrLanguages);
+		const rawText = await recognizer.recognize(base64);
+		return rawText.trim();
+	} catch {
+		return '';
+	}
 }
 
 /**
@@ -992,7 +996,7 @@ function buildTranscriptCallout(ocrText: string): string {
 		.filter(line => line.trim() !== '')
 		.map(line => `> ${line}`)
 		.join('\n');
-	return `> [!note]- Handwriting transcript\n${bodyLines}`;
+	return `> [!note]- Handwriting transcript\n${bodyLines}\n`;
 }
 
 /**
