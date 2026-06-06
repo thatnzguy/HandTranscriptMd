@@ -7,10 +7,10 @@
    - Tab impostazioni
    ============================================= */
 
-import { Plugin, TFile, TFolder, Notice, FuzzySuggestModal, FuzzyMatch, Editor } from 'obsidian';
+import { Plugin, TFile, TFolder, Notice, FuzzySuggestModal, FuzzyMatch, Editor, debounce, TAbstractFile } from 'obsidian';
 import { t, setLocale } from './i18n';
 import { DEFAULT_SETTINGS, HandwritingSettings, HandwritingSettingTab } from './settings';
-import { registerEmbed, insertHandwritingBlock } from './embed';
+import { registerEmbed, insertHandwritingBlock, runOcrRaw, findTranscript, insertTranscript } from './embed';
 import { VIEW_TYPE_HANDWRITING, DrawingEditorView } from './editor-view';
 
 export default class HandwritingPlugin extends Plugin {
@@ -25,7 +25,10 @@ export default class HandwritingPlugin extends Plugin {
 	// Callback notificate quando l'utente cambia bgMode nelle impostazioni
 	public bgModeListeners = new Set<(bgMode: string) => void>();
 
-	// Mappa embedId → azioni (expand/collapse/convert): usata dal menu "⋮" di Obsidian
+	// Tracks files currently being modified by auto-OCR to prevent re-entrant processing
+	private processingFiles = new Set<string>();
+
+	// Map embedId → actions (expand/collapse/convert): used by the Obsidian "⋮" menu
 	public embedActions = new Map<string, {
 		expand:     () => void;
 		collapse:   () => void;
@@ -65,10 +68,19 @@ export default class HandwritingPlugin extends Plugin {
 		themeObserver.observe(activeDocument.body, { attributeFilter: ['class'] });
 		this.register(() => themeObserver.disconnect());
 
-		// Registra la vista editor (tab dedicata per il disegno)
+		// Auto-OCR on save: scan modified .md files for embeds without transcripts
+		this.registerEvent(
+			this.app.vault.on('modify', debounce((file: TAbstractFile) => {
+				if (file instanceof TFile && file.extension === 'md') {
+					void this.handleAutoOcr(file);
+				}
+			}, 3000, true))
+		);
+
+		// Register the editor view (dedicated tab for drawing)
 		this.registerView(VIEW_TYPE_HANDWRITING, (leaf) => new DrawingEditorView(leaf, this));
 
-		// Registra il code block processor per ```handwriting
+		// Register the code block processor for ```handwriting
 		registerEmbed(this);
 
 		// Comando: inserisce un nuovo blocco handwriting nel file corrente
@@ -146,8 +158,8 @@ export default class HandwritingPlugin extends Plugin {
 		);
 	}
 
-	// Restituisce gli embed attivi (container nel DOM) appartenenti al file indicato.
-	// Rimuove dalla mappa gli embed il cui container non è più nel DOM.
+	// Returns the active embeds (container in DOM) belonging to the given file.
+	// Removes from the map any embeds whose container is no longer in the DOM.
 	private getActiveEmbeds(filePath: string) {
 		const result: Array<{ expand: () => void; collapse: () => void; convert: () => Promise<void> }> = [];
 		for (const [id, actions] of this.embedActions) {
@@ -158,6 +170,53 @@ export default class HandwritingPlugin extends Plugin {
 			if (actions.sourcePath === filePath) result.push(actions);
 		}
 		return result;
+	}
+
+	/**
+	 * Scans a saved markdown file for handwriting embeds without transcripts,
+	 * runs OCR silently on each, and inserts collapsed callout blocks.
+	 * Called on every vault 'modify' event for .md files (debounced 3 s).
+	 */
+	private async handleAutoOcr(file: TFile): Promise<void> {
+		if (!this.settings.autoOcrOnSave) return;
+		if (!this.settings.geminiApiKey.trim()) return;
+		if (this.processingFiles.has(file.path)) return;
+
+		const content = await this.app.vault.read(file);
+		const embedRegex = /!\[\[(_handwriting\/[^\]]+\.svg)\]\]/g;
+		const toProcess: string[] = [];
+		let m: RegExpExecArray | null;
+		while ((m = embedRegex.exec(content)) !== null) {
+			const svgPath = m[1]!;
+			if (!findTranscript(content, svgPath)) toProcess.push(svgPath);
+		}
+		if (toProcess.length === 0) return;
+
+		let updated = content;
+		let count = 0;
+		for (const svgPath of toProcess) {
+			try {
+				const svgFile = this.app.vault.getAbstractFileByPath(svgPath);
+				if (!(svgFile instanceof TFile)) continue;
+				const svgContent = await this.app.vault.read(svgFile);
+				const ocrText = await runOcrRaw(svgContent, this);
+				if (!ocrText) continue;
+				updated = insertTranscript(updated, svgPath, ocrText);
+				count++;
+			} catch {
+				// Skip this embed silently — don't block the rest
+			}
+		}
+
+		if (count > 0) {
+			this.processingFiles.add(file.path);
+			try {
+				await this.app.vault.modify(file, updated);
+			} finally {
+				this.processingFiles.delete(file.path);
+			}
+			new Notice(`Added ${count} transcript${count > 1 ? 's' : ''}`);
+		}
 	}
 
 	async loadSettings() {

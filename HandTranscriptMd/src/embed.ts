@@ -943,14 +943,81 @@ function createLegacyPortalButton(
 	window.requestAnimationFrame(update);
 }
 
-// Usa <div> invece di <button> per i bottoni dentro cm-content.
-// I <button> su Android Mobile possono interferire con l'handwriting.
-// key: chiave i18n — usata sia per il title che per data-hwm-key (aggiornamento live al cambio lingua)
+// Uses <div> instead of <button> for buttons inside cm-content.
+// <button> elements on Android Mobile can interfere with handwriting.
+// key: i18n key — used for both the title and data-hwm-key (live update on language change)
 function createBtn(parent: HTMLElement, icon: string, key: I18nKey): HTMLElement {
 	const btn = parent.createDiv({ cls: 'hwm_btn', attr: { title: t(key), role: 'button', tabindex: '0' } });
 	btn.setAttribute('data-hwm-key', key);
-	// setIcon: inserisce l'SVG Lucide in modo sicuro (no innerHTML)
+	// setIcon: inserts the Lucide SVG safely (no innerHTML)
 	setIcon(btn, icon);
 	return btn;
+}
+
+/* =============================================
+   Auto-OCR transcript helpers (Phase 2)
+   ============================================= */
+
+/**
+ * Like runOcrPipeline() but returns raw Gemini text without markdown parsing.
+ * Runs silently — no Notice is shown. Returns empty string instead of throwing
+ * when no text is recognized.
+ */
+export async function runOcrRaw(svgContent: string, plugin: HandwritingPlugin): Promise<string> {
+	const svgEl = new DOMParser()
+		.parseFromString(svgContent, 'image/svg+xml')
+		.documentElement as unknown as SVGElement;
+	const base64 = await svgToBase64Png(svgEl);
+	const recognizer = getRecognizer(plugin.settings.geminiApiKey, plugin.settings.ocrLanguages);
+	const rawText = await recognizer.recognize(base64);
+	return rawText.trim();
+}
+
+/**
+ * Returns true if a transcript callout already exists immediately after
+ * `![[svgPath]]` in the markdown content.
+ */
+export function findTranscript(content: string, svgPath: string): boolean {
+	const escaped = svgPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	return new RegExp(`!\\[\\[${escaped}\\]\\]\\n> \\[!note\\]- Handwriting transcript`).test(content);
+}
+
+/**
+ * Converts OCR text into a collapsed callout block string.
+ * Each non-empty line becomes a `> line` entry.
+ */
+function buildTranscriptCallout(ocrText: string): string {
+	const bodyLines = ocrText
+		.split('\n')
+		.filter(line => line.trim() !== '')
+		.map(line => `> ${line}`)
+		.join('\n');
+	return `> [!note]- Handwriting transcript\n${bodyLines}`;
+}
+
+/**
+ * Inserts a transcript callout immediately after `![[svgPath]]` in content.
+ * Returns the updated string.
+ */
+export function insertTranscript(content: string, svgPath: string, ocrText: string): string {
+	const escaped = svgPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const callout = buildTranscriptCallout(ocrText);
+	return content.replace(
+		new RegExp(`(!\\[\\[${escaped}\\]\\])`),
+		`$1\n${callout}`
+	);
+}
+
+/**
+ * Replaces the existing transcript callout (all consecutive `> ` lines following
+ * the embed) with freshly generated content. Returns the updated string.
+ */
+export function updateTranscript(content: string, svgPath: string, ocrText: string): string {
+	const escaped = svgPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const callout = buildTranscriptCallout(ocrText);
+	return content.replace(
+		new RegExp(`(!\\[\\[${escaped}\\]\\])\\n(?:> [^\\n]*\\n?)+`, 's'),
+		`$1\n${callout}`
+	);
 }
 
