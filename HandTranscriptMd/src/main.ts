@@ -7,7 +7,7 @@
    - Settings tab
    ============================================= */
 
-import { Plugin, TFile, TFolder, Notice, FuzzySuggestModal, FuzzyMatch, Editor, debounce, TAbstractFile } from 'obsidian';
+import { Plugin, TFile, TFolder, Notice, FuzzySuggestModal, FuzzyMatch, Editor, TAbstractFile } from 'obsidian';
 import { t, setLocale } from './i18n';
 import { DEFAULT_SETTINGS, HandwritingSettings, HandwritingSettingTab } from './settings';
 import { registerEmbed, insertHandwritingBlock, runOcrRaw, findTranscript, insertTranscript, updateTranscript } from './embed';
@@ -69,15 +69,20 @@ export default class HandwritingPlugin extends Plugin {
 		themeObserver.observe(activeDocument.body, { attributeFilter: ['class'] });
 		this.register(() => themeObserver.disconnect());
 
-		// Auto-OCR on SVG save: trigger OCR when a drawing file is written to disk
+		// Refresh the inline preview when a drawing SVG changes on disk. This is
+		// mainly for Obsidian Sync: when an SVG edited on another device arrives,
+		// the embed <img> would otherwise stay stale until the note is reopened.
+		// OCR is NOT triggered here — it runs only on the device where the drawing
+		// editor is closed (see handleSvgSave callers), so a synced-in drawing
+		// does not cause this device to redo OCR.
 		this.registerEvent(
-			this.app.vault.on('modify', debounce((file: TAbstractFile) => {
+			this.app.vault.on('modify', (file: TAbstractFile) => {
 				if (file instanceof TFile &&
 					file.extension === 'svg' &&
 					file.parent?.path === this.settings.svgFolder) {
-					void this.handleSvgSave(file);
+					this.refreshPreviewForSvg(file);
 				}
-			}, 3000, true))
+			})
 		);
 
 		// Register the editor view (dedicated tab for drawing)
@@ -163,7 +168,7 @@ export default class HandwritingPlugin extends Plugin {
 	 * the transcript callout in every markdown note that embeds this SVG.
 	 * Skips empty drawings (no strokes).
 	 */
-	private async handleSvgSave(svgFile: TFile): Promise<void> {
+	async handleSvgSave(svgFile: TFile): Promise<void> {
 		if (!this.settings.autoOcrOnSave) return;
 		if (!this.settings.geminiApiKey.trim()) return;
 		if (this.processingFiles.has(svgFile.path)) return;
@@ -206,6 +211,19 @@ export default class HandwritingPlugin extends Plugin {
 			loadingActions.forEach(a => a.setLoading(false));
 			this.processingFiles.delete(svgFile.path);
 		}
+	}
+
+	/** Re-renders the inline <img> of every embed of this SVG (e.g. after a sync-in). */
+	private refreshPreviewForSvg(svgFile: TFile): void {
+		const ids: string[] = [];
+		for (const [embedId, path] of this.embedPaths) {
+			if (path === svgFile.path) ids.push(embedId);
+		}
+		if (ids.length === 0) return;
+		void (async () => {
+			const content = await this.app.vault.read(svgFile);
+			ids.forEach(id => this.refreshPreview(id, content));
+		})();
 	}
 
 	/** Returns the registered portal-panel actions for every embed of svgPath. */

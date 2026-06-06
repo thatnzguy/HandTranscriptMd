@@ -176,6 +176,14 @@ async function runWithEditorSpinner(host: HTMLElement, fn: () => Promise<void>):
 	}
 }
 
+// Triggers auto-OCR for a drawing after its editor closes. OCR runs only here
+// (on the device where the editor was used), not from the global SVG-modify
+// listener — so a drawing synced in from another device is not re-OCR'd locally.
+function triggerAutoOcr(plugin: HandwritingPlugin, svgPath: string): void {
+	const svgFile = plugin.app.vault.getAbstractFileByPath(svgPath);
+	if (svgFile instanceof TFile) void plugin.handleSvgSave(svgFile);
+}
+
 // Inline confirmation overlay for destructive actions inside the editor.
 // Uses the same .hwm_confirm-overlay pattern as the delete confirm; avoids
 // window.confirm() (which steals focus in Electron). Resolves true on confirm.
@@ -431,10 +439,13 @@ export class DrawingEditorView extends ItemView {
 		this.autoSaveCleanup?.();
 		this.autoSaveCleanup = null;
 		if (this.canvas) {
-			// Final save only if there are unsaved changes (avoids spurious OCR)
+			const touched = this.canvas.wasTouched();
+			// Final save only if there are unsaved changes (avoids spurious writes)
 			if (this.canvas.getIsDirty()) await this.saveSvg();
 			this.canvas.destroy();
 			this.canvas = null;
+			// Run OCR once, here, if the drawing changed this session
+			if (touched) triggerAutoOcr(this.plugin, this.svgPath);
 		}
 		// Deregistra il listener bgMode
 		if (this.bgModeListener) {
@@ -574,10 +585,13 @@ export class DrawingModal extends Modal {
 			this.autoSaveCleanup?.();
 			this.autoSaveCleanup = null;
 			if (this.canvas) {
-				// Final save only if there are unsaved changes (avoids spurious OCR)
+				const touched = this.canvas.wasTouched();
+				// Final save only if there are unsaved changes (avoids spurious writes)
 				if (this.canvas.getIsDirty()) await this.saveSvg();
 				this.canvas.destroy();
 				this.canvas = null;
+				// Run OCR once, here, if the drawing changed this session
+				if (touched) triggerAutoOcr(this.plugin, this.svgPath);
 			}
 			// Deregistra il listener bgMode
 			if (this.bgModeListener) {

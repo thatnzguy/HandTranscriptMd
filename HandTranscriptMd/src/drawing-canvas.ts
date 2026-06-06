@@ -54,8 +54,10 @@ export class DrawingCanvas {
 	private historyIdx = -1;
 	// Flag to know if the eraser changed anything during a drag
 	private eraserChanged = false;
-	// Tracks whether the canvas has unsaved changes
+	// Tracks whether the canvas has unsaved changes (reset by markClean after save)
 	private isDirty = false;
+	// Tracks whether the drawing changed at all this session (reset only on load)
+	private touchedSinceLoad = false;
 	// Callback invoked when the canvas height changes (auto-expand)
 	private resizeCb: (() => void) | null = null;
 
@@ -224,8 +226,12 @@ export class DrawingCanvas {
 
 	// Returns true if the canvas has changes that have not been saved yet
 	getIsDirty(): boolean { return this.isDirty; }
-	// Clears the dirty flag — call this after a successful save
+	// Clears the dirty flag — call this after a successful save.
+	// Does NOT clear touchedSinceLoad (that tracks the whole editing session).
 	markClean(): void { this.isDirty = false; }
+	// True if the drawing was changed at all since it was loaded this session.
+	// Used to decide whether to re-run OCR on close (survives auto-save markClean).
+	wasTouched(): boolean { return this.touchedSinceLoad; }
 
 	loadStrokes(strokes: Stroke[]) {
 		this.strokes = cloneStrokes(strokes);
@@ -234,8 +240,9 @@ export class DrawingCanvas {
 		this.historyIdx = -1;
 		this.pushHistory();
 		this.redraw();
-		// Initial load is a clean state — no unsaved changes
+		// Initial load is a clean, untouched state — no unsaved changes
 		this.isDirty = false;
+		this.touchedSinceLoad = false;
 	}
 
 	// Remap colori di tutti i tratti (correnti + history) al cambio tema.
@@ -258,6 +265,7 @@ export class DrawingCanvas {
 		this.strokes = cloneStrokes(this.history[this.historyIdx]!);
 		this.redraw();
 		this.isDirty = true;
+		this.touchedSinceLoad = true;
 		this.changeCb?.();
 		return true;
 	}
@@ -269,6 +277,7 @@ export class DrawingCanvas {
 		this.strokes = cloneStrokes(this.history[this.historyIdx]!);
 		this.redraw();
 		this.isDirty = true;
+		this.touchedSinceLoad = true;
 		this.changeCb?.();
 		return true;
 	}
@@ -282,6 +291,7 @@ export class DrawingCanvas {
 		this.redraw();
 		this.animateHeight(this.defaultHeight);
 		this.isDirty = true;
+		this.touchedSinceLoad = true;
 		this.changeCb?.();
 	}
 
@@ -381,6 +391,7 @@ export class DrawingCanvas {
 				// Save to history after each completed stroke
 				this.pushHistory();
 				this.isDirty = true;
+				this.touchedSinceLoad = true;
 				this.changeCb?.();
 			}
 			this.currentStroke = null;
@@ -388,6 +399,7 @@ export class DrawingCanvas {
 			// Save to history after an eraser drag that removed something
 			this.pushHistory();
 			this.isDirty = true;
+			this.touchedSinceLoad = true;
 			this.changeCb?.();
 		}
 	}
