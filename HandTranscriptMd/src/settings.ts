@@ -274,7 +274,7 @@ export class HandwritingSettingTab extends PluginSettingTab {
 			.addText(text => text
 				.setValue(String(this.plugin.settings.autoSaveIntervalMinutes))
 				.onChange(async (value) => {
-					const n = parseInt(value);
+					const n = parseInt(value, 10);
 					if (!isNaN(n) && n >= 0) {
 						this.plugin.settings.autoSaveIntervalMinutes = n;
 						await this.plugin.saveSettings();
@@ -287,7 +287,7 @@ export class HandwritingSettingTab extends PluginSettingTab {
 			.addText(text => text
 				.setValue(String(this.plugin.settings.autoSaveAfterPauseSeconds))
 				.onChange(async (value) => {
-					const n = parseInt(value);
+					const n = parseInt(value, 10);
 					if (!isNaN(n) && n >= 0) {
 						this.plugin.settings.autoSaveAfterPauseSeconds = n;
 						await this.plugin.saveSettings();

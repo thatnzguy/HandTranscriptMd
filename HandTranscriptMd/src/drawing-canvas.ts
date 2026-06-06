@@ -271,6 +271,7 @@ export class DrawingCanvas {
 	}
 
 	clear() {
+		if (this.strokes.length === 0) return;
 		this.strokes = [];
 		this.pushHistory();
 		// Redraw immediately (canvas visually empty) even if the height is already
