@@ -293,7 +293,7 @@ async function buildEditorUI(opts: {
 	// Cycle background: lines → blank → dots → lines (per-block override, persisted on next save).
 	// Icon is updated below after the per-block pattern is loaded from the SVG.
 	const bgPatternOrder: BgPattern[] = ['lines', 'blank', 'dots'];
-	const bgPatternIcons: Record<BgPattern, string> = { lines: 'align-justify', blank: 'square', dots: 'grid-3x3' };
+	const bgPatternIcons: Record<BgPattern, string> = { lines: 'align-justify', blank: 'square', dots: 'dot' };
 	const cycleBtn = toolbar.createEl('button', {
 		cls: 'hwm_btn hwm_cycle-bg-btn',
 		attr: { title: 'Cycle background (lines → blank → dots)' }

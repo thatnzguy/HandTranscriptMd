@@ -241,9 +241,15 @@ export class DrawingCanvas {
 	getLineColor(): string { return this.lineColor; }
 
 	// Cycles or sets the current background pattern and redraws.
+	// Marks the canvas dirty (and notifies via changeCb) so the new pattern is
+	// persisted by auto-save / on close. Does NOT set touchedSinceLoad, so a pure
+	// background change doesn't trigger a needless OCR re-run (the strokes are unchanged).
 	setBackgroundPattern(pattern: BgPattern) {
+		if (pattern === this.bgPattern) return;
 		this.bgPattern = pattern;
+		this.isDirty = true;
 		this.redraw();
+		this.changeCb?.();
 	}
 	getBackgroundPattern(): BgPattern { return this.bgPattern; }
 	setLineHeight(h: number) { this.lineHeight = h; }
