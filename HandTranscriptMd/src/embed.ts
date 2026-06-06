@@ -572,6 +572,41 @@ export async function insertHandwritingBlock(plugin: HandwritingPlugin) {
 
 	// Inserisce il wikilink: Obsidian trova subito il file → lo renderizza come immagine
 	editor.replaceSelection(`\n![[${svgPath}]]\n`);
+
+	// Auto-open the drawing editor so the user can start writing immediately.
+	// The SVG file already exists on disk, so the editor can load it right away —
+	// no need to wait for the embed to be decorated in the DOM.
+	const sourcePath = view.file?.path ?? '';
+	await openEditorFor(plugin, id, svgPath, sourcePath);
+}
+
+// Opens the drawing editor for the given embed.
+// Desktop: DrawingModal overlay. Mobile: DrawingEditorView in a new tab.
+// Shared by insertHandwritingBlock (auto-open) — mirrors the pencil button logic.
+async function openEditorFor(
+	plugin: HandwritingPlugin,
+	embedId: string,
+	svgPath: string,
+	sourcePath: string
+) {
+	if (Platform.isDesktop) {
+		new DrawingModal(plugin.app, plugin, embedId, svgPath, sourcePath).open();
+		return;
+	}
+	// Mobile: reuse an existing editor tab for this embed if one is already open
+	const leaves = plugin.app.workspace.getLeavesOfType(VIEW_TYPE_HANDWRITING);
+	const existing = leaves.find(l => (l.view as DrawingEditorView).getEmbedId() === embedId);
+	if (existing) {
+		plugin.app.workspace.setActiveLeaf(existing, { focus: true });
+		return;
+	}
+	const leaf = plugin.app.workspace.getLeaf('tab');
+	await leaf.setViewState({
+		type: VIEW_TYPE_HANDWRITING,
+		state: { id: embedId, svg: svgPath, sourcePath },
+		active: true,
+	});
+	void plugin.app.workspace.revealLeaf(leaf);
 }
 
 /* =============================================
