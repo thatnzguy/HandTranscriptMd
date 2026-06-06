@@ -4,14 +4,14 @@
 		"inlineSourceMap": true,
 		"inlineSources": true,
 		"module": "ESNext",
-		"target": "ES6",
+		"target": "ES2018",
 		"allowJs": true,
 		"noImplicitAny": true,
 		"noImplicitThis": true,
 		"noImplicitReturns": true,
 		"moduleResolution": "node",
 		"importHelpers": true,
-		"noUncheckedIndexedAccess": true,
+		"noUncheckedIndexedAccess": false,
 		"isolatedModules": true,
 		"strictNullChecks": true,
 		"strictBindCallApply": true,
@@ -20,9 +20,11 @@
 		"useUnknownInCatchVariables": true,
 		"lib": [
 			"DOM",
+			"DOM.Iterable",
 			"ES5",
 			"ES6",
-			"ES7"
+			"ES7",
+			"ES2018"
 		]
 	},
 	"include": [

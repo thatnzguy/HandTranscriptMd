@@ -381,10 +381,10 @@ export class DrawingEditorView extends ItemView {
 		this.canvas = canvas;
 		this.bgModeListener = bgModeListener;
 
-		// Auto-save debounced (2s dopo l'ultimo cambiamento)
+		// Auto-save debounced (2s after last change)
 		canvas.onChange(() => {
 			if (this.saveTimer) window.clearTimeout(this.saveTimer);
-			this.saveTimer = window.setTimeout(() => { void this.saveSvg(); }, 2000);
+			this.saveTimer = setTimeout(() => { void this.saveSvg(); }, 2000);
 		});
 	}
 
@@ -540,10 +540,10 @@ export class DrawingModal extends Modal {
 		this.canvas = canvas;
 		this.bgModeListener = bgModeListener;
 
-		// Auto-save debounced (2s dopo l'ultimo cambiamento)
+		// Auto-save debounced (2s after last change)
 		canvas.onChange(() => {
 			if (this.saveTimer) window.clearTimeout(this.saveTimer);
-			this.saveTimer = window.setTimeout(() => { void this.saveSvg(); }, 2000);
+			this.saveTimer = setTimeout(() => { void this.saveSvg(); }, 2000);
 		});
 	}
 
