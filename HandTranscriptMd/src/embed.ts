@@ -380,7 +380,7 @@ async function runOcrPipeline(svgContent: string, plugin: HandwritingPlugin): Pr
 		.parseFromString(svgContent, 'image/svg+xml')
 		.documentElement as unknown as SVGElement;
 	const base64     = await svgToBase64Png(svgEl);
-	const recognizer = getRecognizer(plugin.settings.geminiApiKey, plugin.settings.ocrLanguages);
+	const recognizer = getRecognizer(plugin.settings.geminiApiKey, plugin.settings.ocrLanguages, plugin.settings.customOcrPrompt);
 	const rawText    = await recognizer.recognize(base64);
 	if (!rawText.trim()) throw new Error(t('error_no_text'));
 	// In modalità debug mostra il testo grezzo restituito da Gemini (prima del parsing)
@@ -969,7 +969,7 @@ export async function runOcrRaw(svgContent: string, plugin: HandwritingPlugin): 
 			.parseFromString(svgContent, 'image/svg+xml')
 			.documentElement as unknown as SVGElement;
 		const base64 = await svgToBase64Png(svgEl);
-		const recognizer = getRecognizer(plugin.settings.geminiApiKey, plugin.settings.ocrLanguages);
+		const recognizer = getRecognizer(plugin.settings.geminiApiKey, plugin.settings.ocrLanguages, plugin.settings.customOcrPrompt);
 		const rawText = await recognizer.recognize(base64);
 		return rawText.trim();
 	} catch {

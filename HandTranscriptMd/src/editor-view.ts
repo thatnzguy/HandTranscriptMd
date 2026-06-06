@@ -405,7 +405,7 @@ export class DrawingEditorView extends ItemView {
 				this.canvas.getHeight(), this.canvas.getBgColor(), this.canvas.getLineColor());
 			const svgEl  = new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement as unknown as SVGElement;
 			const base64 = await svgToBase64Png(svgEl);
-			const recognizer = getRecognizer(this.plugin.settings.geminiApiKey, this.plugin.settings.ocrLanguages);
+			const recognizer = getRecognizer(this.plugin.settings.geminiApiKey, this.plugin.settings.ocrLanguages, this.plugin.settings.customOcrPrompt);
 			const rawText = await recognizer.recognize(base64);
 			if (!rawText.trim()) throw new Error(t('error_no_text'));
 			const markdown = parseHandwritingToMarkdown(rawText);
@@ -562,7 +562,7 @@ export class DrawingModal extends Modal {
 				this.canvas.getBgColor(), this.canvas.getLineColor());
 			const svgEl  = new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement as unknown as SVGElement;
 			const base64 = await svgToBase64Png(svgEl);
-			const recognizer = getRecognizer(this.plugin.settings.geminiApiKey, this.plugin.settings.ocrLanguages);
+			const recognizer = getRecognizer(this.plugin.settings.geminiApiKey, this.plugin.settings.ocrLanguages, this.plugin.settings.customOcrPrompt);
 			const rawText = await recognizer.recognize(base64);
 			if (!rawText.trim()) throw new Error(t('error_no_text'));
 			const markdown = parseHandwritingToMarkdown(rawText);
