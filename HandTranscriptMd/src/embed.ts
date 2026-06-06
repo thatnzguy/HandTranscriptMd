@@ -17,6 +17,8 @@ import {
 	Notice,
 	Platform,
 	setIcon,
+	Modal,
+	App,
 } from 'obsidian';
 import type HandwritingPlugin from './main';
 import { t, type I18nKey } from './i18n';
@@ -699,6 +701,19 @@ function createPortalPanel(
 	sep.className = 'hwm_separator';
 	panel.appendChild(sep);
 
+	// --- Show transcript button (subtle feature; rarely used) ---
+	// The transcript callout is styled to be visually minimal, so this button
+	// gives an explicit way to read the OCR text on demand.
+	const transcriptBtn = createPanelBtnRaw(panel, 'eye', 'Show transcript');
+	transcriptBtn.addEventListener('click', () => { void (async () => {
+		const mdFile = plugin.app.vault.getAbstractFileByPath(sourcePath);
+		if (!(mdFile instanceof TFile)) { new Notice(t('error_file_not_found')); return; }
+		const content = await plugin.app.vault.read(mdFile);
+		const text = extractTranscript(content, svgPath);
+		if (!text) { new Notice('No transcript yet'); return; }
+		new TranscriptModal(plugin.app, text).open();
+	})(); });
+
 	// --- Bottone converti in Markdown ---
 	const convertBtn = createPanelBtn(panel, 'file-text', 'btn_convert');
 
@@ -908,6 +923,19 @@ function createPanelBtn(parent: HTMLElement, icon: string, key: I18nKey): HTMLEl
 	return btn;
 }
 
+// Like createPanelBtn but takes a literal title string instead of an i18n key.
+// Used for the rarely-used "Show transcript" button, which has no localized key.
+function createPanelBtnRaw(parent: HTMLElement, icon: string, title: string): HTMLElement {
+	const btn = activeDocument.createElement('div');
+	btn.className = 'hwm_btn';
+	btn.setAttribute('title', title);
+	btn.setAttribute('role', 'button');
+	btn.setAttribute('tabindex', '0');
+	setIcon(btn, icon);
+	parent.appendChild(btn);
+	return btn;
+}
+
 /* ---------- Bottone portale (fuori da cm-content) — Formato legacy ---------- */
 
 // Crea un singolo <button> in document.body per aprire la tab editor.
@@ -1014,16 +1042,18 @@ export async function runOcrRaw(svgContent: string, plugin: HandwritingPlugin): 
 
 /**
  * Returns true if a transcript callout already exists immediately after
- * `![[svgPath]]` in the markdown content.
+ * `![[svgPath]]` in the markdown content. Recognises both the legacy
+ * `[!note]-` format and the current `[!hwm-transcript]-` format.
  */
 export function findTranscript(content: string, svgPath: string): boolean {
 	const escaped = svgPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-	return new RegExp(`!\\[\\[${escaped}\\]\\]\\n> \\[!note\\]- Handwriting transcript`).test(content);
+	return new RegExp(`!\\[\\[${escaped}\\]\\]\\n> \\[!(?:note|hwm-transcript)\\]- Handwriting transcript`).test(content);
 }
 
 /**
  * Converts OCR text into a collapsed callout block string.
- * Each non-empty line becomes a `> line` entry.
+ * Each non-empty line becomes a `> line` entry. Uses the custom
+ * `[!hwm-transcript]-` callout type so it can be styled to be visually subtle.
  */
 function buildTranscriptCallout(ocrText: string): string {
 	const bodyLines = ocrText
@@ -1031,7 +1061,45 @@ function buildTranscriptCallout(ocrText: string): string {
 		.filter(line => line.trim() !== '')
 		.map(line => `> ${line}`)
 		.join('\n');
-	return `> [!note]- Handwriting transcript\n${bodyLines}\n`;
+	return `> [!hwm-transcript]- Handwriting transcript\n${bodyLines}\n`;
+}
+
+/**
+ * Extracts the plain transcript text (no callout markup) for a given embed.
+ * Returns null if no transcript callout follows `![[svgPath]]`.
+ */
+export function extractTranscript(content: string, svgPath: string): string | null {
+	const escaped = svgPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const m = content.replace(/\r\n/g, '\n').match(
+		new RegExp(`!\\[\\[${escaped}\\]\\]\\n((?:> [^\\n]*\\n?)+)`)
+	);
+	if (!m) return null;
+	const lines = (m[1] ?? '')
+		.split('\n')
+		.map(l => l.replace(/^> ?/, ''))
+		.filter(l => l.length > 0);
+	// Drop the callout title line (`[!hwm-transcript]- Handwriting transcript`)
+	if (lines.length && /^\[!(?:note|hwm-transcript)\]/.test(lines[0]!)) lines.shift();
+	const text = lines.join('\n').trim();
+	return text || null;
+}
+
+/**
+ * Small modal that displays a drawing's transcript text.
+ * Used by the "Show transcript" portal button — the callout itself is
+ * styled to be subtle, so this gives a clear on-demand view of the text.
+ */
+class TranscriptModal extends Modal {
+	constructor(app: App, private text: string) {
+		super(app);
+	}
+	onOpen(): void {
+		this.titleEl.setText('Handwriting transcript');
+		this.contentEl.createEl('p', { text: this.text, cls: 'hwm_transcript-modal-text' });
+	}
+	onClose(): void {
+		this.contentEl.empty();
+	}
 }
 
 /**
