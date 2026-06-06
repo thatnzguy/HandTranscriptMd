@@ -471,7 +471,18 @@ function escapeRegex(s: string): string {
    Elimina embed
    ============================================= */
 
-// Rimuove ![[svgPath]] dal .md e cancella il file SVG
+// Removes a transcript callout that immediately follows ![[svgPath]],
+// keeping the embed line itself. Returns the updated content.
+function removeTranscriptBlock(content: string, svgPath: string): string {
+	const escaped = escapeRegex(svgPath);
+	return content.replace(
+		new RegExp(`(!\\[\\[${escaped}\\]\\]\\n)(?:> [^\\n]*\\n?)+`),
+		'$1'
+	);
+}
+
+// Rimuove ![[svgPath]] dal .md, cancella il file SVG, e rimuove anche
+// l'eventuale callout di trascrizione associato (rimozione completa).
 async function removeWikiEmbed(
 	svgPath: string,
 	sourcePath: string,
@@ -480,8 +491,10 @@ async function removeWikiEmbed(
 	const mdFile = plugin.app.vault.getAbstractFileByPath(sourcePath);
 	if (!(mdFile instanceof TFile)) { new Notice(t('error_file_not_found')); return; }
 
-	const content = await plugin.app.vault.read(mdFile);
-	const updated = content.replace(wikiEmbedRegex(svgPath), '\n');
+	const content = (await plugin.app.vault.read(mdFile)).replace(/\r\n/g, '\n');
+	// Remove the transcript callout first (uses the embed as anchor), then the embed line
+	let updated = removeTranscriptBlock(content, svgPath);
+	updated = updated.replace(wikiEmbedRegex(svgPath), '\n');
 	if (updated !== content) await plugin.app.vault.modify(mdFile, updated);
 
 	// Cancella il file SVG
@@ -489,6 +502,27 @@ async function removeWikiEmbed(
 	if (svgFile instanceof TFile) await plugin.app.fileManager.trashFile(svgFile);
 
 	new Notice(t('notice_deleted'));
+}
+
+// Discards the drawing but keeps its transcript: removes the ![[svgPath]] embed
+// line and trashes the SVG file, leaving the transcript callout in the note.
+async function discardDrawingKeepTranscript(
+	svgPath: string,
+	sourcePath: string,
+	plugin: HandwritingPlugin
+) {
+	const mdFile = plugin.app.vault.getAbstractFileByPath(sourcePath);
+	if (!(mdFile instanceof TFile)) { new Notice(t('error_file_not_found')); return; }
+
+	const content = (await plugin.app.vault.read(mdFile)).replace(/\r\n/g, '\n');
+	// Remove only the embed line — the transcript callout below it is preserved
+	const updated = content.replace(wikiEmbedRegex(svgPath), '\n');
+	if (updated !== content) await plugin.app.vault.modify(mdFile, updated);
+
+	const svgFile = plugin.app.vault.getAbstractFileByPath(svgPath);
+	if (svgFile instanceof TFile) await plugin.app.fileManager.trashFile(svgFile);
+
+	new Notice('Drawing discarded — transcript kept');
 }
 
 // Rimuove il code block legacy dal .md e cancella il file SVG
@@ -724,6 +758,22 @@ function createPortalPanel(
 	// anche da compresso (collapsedHeight è sempre >> 6px + altezza pannello).
 	const collapseBtn = createPanelBtn(panel, 'chevron-up', 'btn_collapse');
 	collapseBtn.classList.add('hwm_collapse-btn');
+
+	// --- Discard drawing, keep transcript ---
+	// Removes the drawing + embed but preserves the OCR transcript callout.
+	// Only meaningful when a transcript exists, so it validates on click.
+	const discardBtn = createPanelBtnRaw(panel, 'image-off', 'Discard drawing, keep transcript');
+	discardBtn.addEventListener('click', () => { void (async () => {
+		const mdFile = plugin.app.vault.getAbstractFileByPath(sourcePath);
+		if (!(mdFile instanceof TFile)) { new Notice(t('error_file_not_found')); return; }
+		const content = await plugin.app.vault.read(mdFile);
+		if (!extractTranscript(content, svgPath)) {
+			new Notice('No transcript yet — use Delete to remove the drawing');
+			return;
+		}
+		if (!await showInlineConfirm(container, 'Delete the drawing but keep its transcript text?')) return;
+		await discardDrawingKeepTranscript(svgPath, sourcePath, plugin);
+	})(); });
 
 	// --- Bottone elimina ---
 	const deleteBtn = createPanelBtn(panel, 'file-x', 'btn_delete');
