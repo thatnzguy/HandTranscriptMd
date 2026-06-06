@@ -238,6 +238,8 @@ async function buildEditorUI(opts: {
 	const lineColor = getEffectiveLineColor(plugin.settings);
 	// Sfondo via CSS var: background-color: var(--hwm-bg) in .hwm_editor-view
 	el.setCssProps({ '--hwm-bg': bgColor });
+	// Enables the mobile editor styles (larger touch targets, wrapping toolbar)
+	if (isMobile) el.classList.add('hwm_mobile');
 
 	// --- Top bar: contiene la toolbar centrata e il bottone X ---
 	const topbar = el.createDiv({ cls: 'hwm_editor-topbar hwm_editor-topbar--modal' });

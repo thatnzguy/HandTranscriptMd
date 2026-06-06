@@ -734,6 +734,29 @@
 	transform: translateY(-50%);
 }
 
+/* --- Mobile editor topbar: avoid the squished/overlapping toolbar ---
+   On narrow screens the centered toolbar (many buttons) overflowed under the
+   absolutely-positioned close X. Lay the topbar out as toolbar + close X with
+   the toolbar allowed to wrap onto multiple rows, and the X in-flow at the top
+   right so it never overlaps a button. */
+.hwm_mobile .hwm_editor-topbar--modal {
+	justify-content: space-between;
+	align-items: flex-start;
+	flex-wrap: nowrap;
+}
+.hwm_mobile .hwm_editor-topbar--modal .hwm_close-btn {
+	position: static;
+	transform: none;
+	flex-shrink: 0;
+}
+.hwm_mobile .hwm_editor-toolbar {
+	flex-wrap: wrap;
+	flex: 1 1 auto;
+	min-width: 0;
+	justify-content: flex-start;
+	row-gap: 6px;
+}
+
 /* Nasconde la X nativa di Obsidian nel DrawingModal: la chiusura avviene dal bottone X in toolbar.
    Specificità 0,3,0 basta a battere Obsidian senza !important. */
 .modal-container .hwm_modal .modal-close-button {
