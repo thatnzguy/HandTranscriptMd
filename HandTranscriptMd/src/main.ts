@@ -1,28 +1,29 @@
 /* =============================================
    Handwriting to Markdown — Plugin Entry Point
 
-   Registra:
+   Registers:
    - Code block processor "handwriting" (embed inline)
-   - Comando per inserire un nuovo blocco handwriting
-   - Tab impostazioni
+   - Command to insert a new handwriting block
+   - Settings tab
    ============================================= */
 
 import { Plugin, TFile, TFolder, Notice, FuzzySuggestModal, FuzzyMatch, Editor, debounce, TAbstractFile } from 'obsidian';
 import { t, setLocale } from './i18n';
 import { DEFAULT_SETTINGS, HandwritingSettings, HandwritingSettingTab } from './settings';
-import { registerEmbed, insertHandwritingBlock, runOcrRaw, findTranscript, insertTranscript } from './embed';
+import { registerEmbed, insertHandwritingBlock, runOcrRaw, findTranscript, insertTranscript, updateTranscript } from './embed';
 import { VIEW_TYPE_HANDWRITING, DrawingEditorView } from './editor-view';
+import { parseSvgStrokes } from './svg-utils';
 
 export default class HandwritingPlugin extends Plugin {
 	settings: HandwritingSettings;
 
-	// Mappa di callback per aggiornare le preview inline quando l'editor tab salva
+	// Map of callbacks to update inline previews when the editor tab saves
 	public previewCallbacks = new Map<string, (svgContent: string) => void>();
 
-	// Mappa embedId → svgPath: permette di trovare i file SVG da rimappare al cambio bgMode
+	// Map embedId → svgPath: allows finding SVG files to remap on bgMode change
 	public embedPaths = new Map<string, string>();
 
-	// Callback notificate quando l'utente cambia bgMode nelle impostazioni
+	// Callbacks notified when the user changes bgMode in settings
 	public bgModeListeners = new Set<(bgMode: string) => void>();
 
 	// Tracks files currently being modified by auto-OCR to prevent re-entrant processing
@@ -37,13 +38,13 @@ export default class HandwritingPlugin extends Plugin {
 		sourcePath: string;
 	}>();
 
-	// Invocato dall'editor tab dopo ogni salvataggio per aggiornare la preview inline
+	// Called by the editor tab after each save to update the inline preview
 	refreshPreview(id: string, svgContent: string) {
 		this.previewCallbacks.get(id)?.(svgContent);
 	}
 
-	// Chiamato da settings quando l'utente cambia bgMode:
-	// notifica pannelli (aggiornamento classe dark) e SVG attivi (remap colori)
+	// Called by settings when the user changes bgMode:
+	// notifies panels (dark class update) and active SVGs (color remap)
 	notifyBgModeChange() {
 		this.bgModeListeners.forEach(cb => cb(this.settings.bgMode));
 	}
@@ -51,12 +52,12 @@ export default class HandwritingPlugin extends Plugin {
 	async onload() {
 		await this.loadSettings();
 
-		// Applica la lingua interfaccia salvata (o la lingua di sistema se 'auto')
+		// Apply the saved interface language (or system language if 'auto')
 		setLocale(this.settings.uiLanguage);
 
-		// Rileva cambio tema Obsidian. Doppio meccanismo per massima compatibilità Android:
-		// - css-change: evento Obsidian garantito al cambio tema (più affidabile su alcuni WebView Android)
-		// - MutationObserver: fallback per cambii di classe body da plugin terzi o versioni vecchie
+		// Detect Obsidian theme changes. Dual mechanism for maximum Android compatibility:
+		// - css-change: Obsidian event guaranteed on theme change (more reliable on some Android WebViews)
+		// - MutationObserver: fallback for body class changes from third-party plugins or older versions
 		this.registerEvent(
 			this.app.workspace.on('css-change', () => {
 				if (this.settings.bgMode === 'auto') this.notifyBgModeChange();
@@ -68,11 +69,13 @@ export default class HandwritingPlugin extends Plugin {
 		themeObserver.observe(activeDocument.body, { attributeFilter: ['class'] });
 		this.register(() => themeObserver.disconnect());
 
-		// Auto-OCR on save: scan modified .md files for embeds without transcripts
+		// Auto-OCR on SVG save: trigger OCR when a drawing file is written to disk
 		this.registerEvent(
 			this.app.vault.on('modify', debounce((file: TAbstractFile) => {
-				if (file instanceof TFile && file.extension === 'md') {
-					void this.handleAutoOcr(file);
+				if (file instanceof TFile &&
+					file.extension === 'svg' &&
+					file.parent?.path === this.settings.svgFolder) {
+					void this.handleSvgSave(file);
 				}
 			}, 3000, true))
 		);
@@ -107,10 +110,10 @@ export default class HandwritingPlugin extends Plugin {
 		// Tab impostazioni
 		this.addSettingTab(new HandwritingSettingTab(this.app, this));
 
-		// Voci nel menu "⋮" (tre puntini) di Obsidian per operazioni su tutti i disegni.
-		// Vengono aggiunte con setSection('danger') e poi spostate prima di "Elimina file"
-		// tramite (menu as any).items — l'unico modo per posizionarle nell'ultima sezione
-		// sopra Delete senza usare API private più instabili.
+		// Entries in the Obsidian "⋮" (three-dot) menu for bulk operations on all drawings.
+		// Added with setSection('danger') and then moved before "Delete file"
+		// via (menu as any).items — the only way to position them in the last section
+		// above Delete without using more unstable private APIs.
 		this.registerEvent(
 			this.app.workspace.on('file-menu', (menu, file) => {
 				if (!(file instanceof TFile) || file.extension !== 'md') return;
@@ -135,7 +138,7 @@ export default class HandwritingPlugin extends Plugin {
 					.setIcon('file-text')
 					.setSection('danger')
 					.onClick(() => {
-						// Sequenziale: si ferma al primo errore
+						// Sequential: stops on first error
 						void (async () => {
 							try {
 								for (const actions of this.getActiveEmbeds(file.path)) {
@@ -147,9 +150,9 @@ export default class HandwritingPlugin extends Plugin {
 						})();
 					})
 				);
-				// Sposta le 3 voci appena aggiunte prima del primo item 'danger' esistente
-				// (cioè prima di "Elimina file"), in modo che compaiano sopra di esso.
-				// Accesso a proprietà interna non pubblica di Menu: necessario per il riposizionamento.
+				// Move the 3 newly added items before the first existing 'danger' item
+				// (i.e. before "Delete file"), so they appear above it.
+				// Access to non-public internal Menu property: needed for repositioning.
 			const items = (menu as unknown as { items: Array<{ section: string }> }).items;
 				const added = items.splice(items.length - 3, 3);
 				const firstDangerIdx = items.findIndex(i => i.section === 'danger');
@@ -173,46 +176,61 @@ export default class HandwritingPlugin extends Plugin {
 	}
 
 	/**
-	 * Scans a saved markdown file for handwriting embeds without transcripts,
-	 * runs OCR silently on each, and inserts collapsed callout blocks.
-	 * Called on every vault 'modify' event for .md files (debounced 3 s).
+	 * Called when an SVG drawing file is saved. Runs OCR and inserts or updates
+	 * the transcript callout in every markdown note that embeds this SVG.
+	 * Skips empty drawings (no strokes).
 	 */
-	private async handleAutoOcr(file: TFile): Promise<void> {
+	private async handleSvgSave(svgFile: TFile): Promise<void> {
 		if (!this.settings.autoOcrOnSave) return;
 		if (!this.settings.geminiApiKey.trim()) return;
-		if (this.processingFiles.has(file.path)) return;
+		if (this.processingFiles.has(svgFile.path)) return;
 
-		this.processingFiles.add(file.path);
+		this.processingFiles.add(svgFile.path);
 		try {
-			const content = (await this.app.vault.read(file)).replace(/\r\n/g, '\n');
-			const embedRegex = /!\[\[(_handwriting\/[^\]]+\.svg)\]\]/g;
-			const toProcess: string[] = [];
-			let m: RegExpExecArray | null;
-			while ((m = embedRegex.exec(content)) !== null) {
-				const svgPath = m[1]!;
-				if (!findTranscript(content, svgPath)) toProcess.push(svgPath);
-			}
-			if (toProcess.length === 0) return;
+			const svgContent = await this.app.vault.read(svgFile);
 
-			let updated = content;
+			// Skip empty drawings — no strokes means nothing to transcribe
+			if (parseSvgStrokes(svgContent).length === 0) return;
+
+			const ocrText = await runOcrRaw(svgContent, this);
+			if (!ocrText) return;
+
+			// Find all markdown notes that embed this SVG via the metadata cache
+			const mdFiles = this.findMarkdownFilesEmbedding(svgFile.path);
 			let count = 0;
-			for (const svgPath of toProcess) {
-				const svgFile = this.app.vault.getAbstractFileByPath(svgPath);
-				if (!(svgFile instanceof TFile)) continue;
-				const svgContent = await this.app.vault.read(svgFile);
-				const ocrText = await runOcrRaw(svgContent, this);
-				if (!ocrText) continue;
-				updated = insertTranscript(updated, svgPath, ocrText);
-				count++;
+			for (const mdFile of mdFiles) {
+				if (this.processingFiles.has(mdFile.path)) continue;
+				this.processingFiles.add(mdFile.path);
+				try {
+					const content = (await this.app.vault.read(mdFile)).replace(/\r\n/g, '\n');
+					const updated = findTranscript(content, svgFile.path)
+						? updateTranscript(content, svgFile.path, ocrText)
+						: insertTranscript(content, svgFile.path, ocrText);
+					if (updated !== content) {
+						await this.app.vault.modify(mdFile, updated);
+						count++;
+					}
+				} finally {
+					this.processingFiles.delete(mdFile.path);
+				}
 			}
-
-			if (count > 0) {
-				await this.app.vault.modify(file, updated);
-				new Notice(`Added ${count} transcript${count > 1 ? 's' : ''}`);
-			}
+			if (count > 0) new Notice(`Handwriting transcript updated`);
 		} finally {
-			this.processingFiles.delete(file.path);
+			this.processingFiles.delete(svgFile.path);
 		}
+	}
+
+	/** Returns all markdown TFiles whose resolved links include svgPath. */
+	private findMarkdownFilesEmbedding(svgPath: string): TFile[] {
+		const result: TFile[] = [];
+		const resolved = this.app.metadataCache.resolvedLinks;
+		for (const [notePath, links] of Object.entries(resolved)) {
+			if (links[svgPath]) {
+				const file = this.app.vault.getAbstractFileByPath(notePath);
+				if (file instanceof TFile && file.extension === 'md') result.push(file);
+			}
+		}
+		return result;
 	}
 
 	async loadSettings() {
@@ -232,8 +250,8 @@ export default class HandwritingPlugin extends Plugin {
 	}
 }
 
-// Modal fuzzy-search per selezionare un SVG esistente nella cartella handwriting
-// e inserire il riferimento ![[path]] nel cursore dell'editor attivo.
+// Fuzzy-search modal for selecting an existing SVG in the handwriting folder
+// and inserting the ![[path]] reference at the active editor cursor.
 class SvgReferenceSuggest extends FuzzySuggestModal<TFile> {
 	constructor(
 		app: import('obsidian').App,
@@ -244,7 +262,7 @@ class SvgReferenceSuggest extends FuzzySuggestModal<TFile> {
 		this.setPlaceholder('Cerca SVG...');
 	}
 
-	// Restituisce tutti gli SVG nella cartella impostata (esclusa _converted)
+	// Returns all SVGs in the configured folder (excluding _converted)
 	getItems(): TFile[] {
 		const folder = this.app.vault.getAbstractFileByPath(this.plugin.settings.svgFolder);
 		if (!(folder instanceof TFolder)) return [];
@@ -256,22 +274,22 @@ class SvgReferenceSuggest extends FuzzySuggestModal<TFile> {
 		);
 	}
 
-	// Testo usato per il fuzzy-match (nome file)
+	// Text used for fuzzy-match (file name)
 	getItemText(file: TFile): string {
 		return file.name;
 	}
 
-	// Mostra thumbnail SVG + nome file invece del solo testo
+	// Shows SVG thumbnail + file name instead of plain text
 	renderSuggestion(match: FuzzyMatch<TFile>, el: HTMLElement): void {
 		const file = match.item;
 		el.addClass('hwm_svg-suggest-item');
-		// Thumbnail SVG tramite resource URL del vault
+		// SVG thumbnail via vault resource URL
 		const img = el.createEl('img', { cls: 'hwm_svg-thumb' });
 		img.src = this.app.vault.getResourcePath(file);
 		el.createEl('span', { text: file.name, cls: 'hwm_svg-suggest-name' });
 	}
 
-	// Inserisce ![[path]] al cursore quando l'utente seleziona un file
+	// Inserts ![[path]] at the cursor when the user selects a file
 	onChooseItem(file: TFile): void {
 		this.editor.replaceSelection(`![[${file.path}]]`);
 	}
