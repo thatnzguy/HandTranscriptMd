@@ -108,19 +108,13 @@ export class DrawingCanvas {
 		this.debugFn = debugFn;
 
 		this.canvas = activeDocument.createElement('canvas');
-		// Dimensione CSS: pixel logici → il browser mostra il canvas a questa dimensione
-		this.canvas.style.width  = width  + 'px';
-		this.canvas.style.height = height + 'px';
-		// Buffer interno: pixel fisici moltiplicati per il DPR → nessuna pixelazione
-		this.canvas.width  = Math.round(width  * this.dpr);
-		this.canvas.height = Math.round(height * this.dpr);
 		this.canvas.classList.add('hwm_canvas');
 		// touch-action gestito in styles.css (.hwm_canvas { touch-action: none !important })
 		container.appendChild(this.canvas);
 
 		this.ctx = this.canvas.getContext('2d')!;
-		// Scala il context: da questo punto tutte le coordinate ctx sono in pixel logici
-		this.ctx.scale(this.dpr, this.dpr);
+		// Sizes the canvas (CSS + pixel buffer) and applies the world→device transform
+		this.syncCanvasSize();
 		this.clearBackground();
 
 		// Stato iniziale nella history (canvas vuoto)
@@ -154,14 +148,31 @@ export class DrawingCanvas {
 			// Espansione: il mondo si allarga con il display
 			this.worldWidth = displayWidth;
 		}
-		// Aggiorna larghezza logica e fattore di scala
+		// Aggiorna larghezza logica e fattore di scala (uniforme su X e Y)
 		this.logicalWidth = displayWidth;
 		this.viewScale    = this.logicalWidth / this.worldWidth;
-		this.canvas.style.width = displayWidth + 'px';
-		// Cambiare canvas.width resetta il context → ri-applicare la scala DPR
-		this.canvas.width = Math.round(displayWidth * this.dpr);
-		this.ctx.scale(this.dpr, this.dpr);
+		this.syncCanvasSize();
 		this.redraw();
+	}
+
+	// Sets the device transform: world units → physical pixels, scaled uniformly
+	// by viewScale (so the drawing is never horizontally distorted) and by the
+	// device pixel ratio (so it isn't blurry). Re-applied after every buffer resize.
+	private applyTransform() {
+		const s = this.dpr * this.viewScale;
+		this.ctx.setTransform(s, 0, 0, s, 0, 0);
+	}
+
+	// Sizes the canvas CSS box and pixel buffer from the current world size and
+	// viewScale, then re-applies the transform. Display = world * viewScale.
+	private syncCanvasSize() {
+		const dispW = this.logicalWidth;                  // = worldWidth * viewScale
+		const dispH = this.logicalHeight * this.viewScale;
+		this.canvas.style.width  = dispW + 'px';
+		this.canvas.style.height = dispH + 'px';
+		this.canvas.width  = Math.round(dispW * this.dpr);
+		this.canvas.height = Math.round(dispH * this.dpr);
+		this.applyTransform();
 	}
 	// Abilita scroll manuale con il dito sul canvas.
 	// touch-action resta 'none' (la penna non trigga scroll del browser),
@@ -298,10 +309,7 @@ export class DrawingCanvas {
 	resizeHeight(newHeight: number) {
 		if (newHeight < 100) return;
 		this.logicalHeight = newHeight;
-		this.canvas.style.height = newHeight + 'px';
-		// canvas.height resetta il context → ri-applicare la scala DPR
-		this.canvas.height = Math.round(newHeight * this.dpr);
-		this.ctx.scale(this.dpr, this.dpr);
+		this.syncCanvasSize();
 		this.redraw();
 	}
 
@@ -437,10 +445,7 @@ export class DrawingCanvas {
 			const h = Math.round(startLogicalH + (targetLogicalH - startLogicalH) * eased);
 
 			this.logicalHeight = h;
-			this.canvas.style.height = h + 'px';
-			// canvas.height è in pixel fisici; cambiarlo resetta il context → ri-scalare
-			this.canvas.height = Math.round(h * this.dpr);
-			this.ctx.scale(this.dpr, this.dpr);
+			this.syncCanvasSize();
 			this.redraw();
 			if (this.currentStroke) {
 				this.drawFullStroke(this.currentStroke);
@@ -462,10 +467,10 @@ export class DrawingCanvas {
 
 	private eventToPoint(e: PointerEvent): Point {
 		const rect = this.canvas.getBoundingClientRect();
-		// Divide per viewScale per tornare alle coordinate mondo (invarianti al cambio orientamento)
+		// Divide per viewScale (uniforme su X e Y) per tornare alle coordinate mondo
 		return {
 			x: (e.clientX - rect.left) / this.viewScale,
-			y: (e.clientY - rect.top),
+			y: (e.clientY - rect.top) / this.viewScale,
 			pressure: e.pressure > 0 ? e.pressure : 0.5,
 		};
 	}
@@ -528,8 +533,8 @@ export class DrawingCanvas {
 	/* --- Rendering --- */
 
 	private clearBackground() {
-		// Usa pixel logici: ctx.scale(dpr, dpr) è già applicato nel constructor/resize
-		const w = this.logicalWidth;
+		// Draw in world units — applyTransform() already scales by dpr * viewScale
+		const w = this.worldWidth;
 		const h = this.logicalHeight;
 
 		this.ctx.fillStyle = this.bgColor;
@@ -557,9 +562,8 @@ export class DrawingCanvas {
 		if (pts.length < 2) return;
 
 		const ctx = this.ctx;
-		// Scala orizzontale: comprime i tratti mondo nello spazio logico disponibile
+		// Coordinate are world units; applyTransform() handles uniform scaling
 		ctx.save();
-		ctx.scale(this.viewScale, 1.0);
 		ctx.strokeStyle = stroke.color;
 		ctx.lineWidth = stroke.width;
 		ctx.lineCap = 'round';
@@ -589,9 +593,8 @@ export class DrawingCanvas {
 		if (pts.length < 2) return;
 
 		const ctx = this.ctx;
-		// Stessa scala di drawFullStroke per coerenza durante il disegno live
+		// World units, same as drawFullStroke — applyTransform() handles scaling
 		ctx.save();
-		ctx.scale(this.viewScale, 1.0);
 		ctx.strokeStyle = stroke.color;
 		ctx.lineWidth = stroke.width;
 		ctx.lineCap = 'round';
