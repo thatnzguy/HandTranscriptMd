@@ -89,6 +89,64 @@ async function saveSvgToDisk(
 		await plugin.app.vault.create(svgPath, svg);
 	}
 	plugin.refreshPreview(embedId, svg);
+	// Mark the canvas clean so dirty-gated auto-saves don't re-save unchanged work
+	canvas.markClean();
+}
+
+/* =============================================
+   setupAutoSave — Auto-save wiring shared by the modal and the tab editor.
+
+   Wires three independent triggers, each gated by its setting and by the
+   canvas dirty flag (only saves when there are unsaved changes):
+   - Feature 6: save N seconds after the pen pauses (debounced on change)
+   - Feature 5: periodic save every N minutes
+   - Feature 4: save when the editor is minimized / loses focus
+
+   Returns a cleanup function that tears down all timers and listeners;
+   the caller must invoke it in onClose().
+   ============================================= */
+function setupAutoSave(opts: {
+	canvas: DrawingCanvas;
+	plugin: HandwritingPlugin;
+	save: () => Promise<void>;
+}): () => void {
+	const { canvas, plugin, save } = opts;
+	const saveIfDirty = () => { if (canvas.getIsDirty()) void save(); };
+	const cleanups: Array<() => void> = [];
+
+	// Feature 6 — auto-save after the pen pauses (debounced on every change).
+	// 0 = disabled. Replaces the previous hard-coded 2s debounce.
+	const pauseMs = plugin.settings.autoSaveAfterPauseSeconds * 1000;
+	let pauseTimer: ReturnType<typeof setTimeout> | null = null;
+	canvas.onChange(() => {
+		if (pauseMs <= 0) return;
+		if (pauseTimer) clearTimeout(pauseTimer);
+		pauseTimer = setTimeout(saveIfDirty, pauseMs);
+	});
+	cleanups.push(() => { if (pauseTimer) clearTimeout(pauseTimer); });
+
+	// Feature 5 — periodic auto-save. 0 = disabled.
+	const intervalMin = plugin.settings.autoSaveIntervalMinutes;
+	if (intervalMin > 0) {
+		const id = window.setInterval(saveIfDirty, intervalMin * 60 * 1000);
+		cleanups.push(() => window.clearInterval(id));
+	}
+
+	// Feature 4 — auto-save on minimize / loss of focus.
+	// visibilitychange covers app backgrounding (key on Android); blur covers
+	// desktop window/focus loss.
+	if (plugin.settings.autoSaveOnMinimize) {
+		const onVis = () => { if (activeDocument.visibilityState === 'hidden') saveIfDirty(); };
+		const onBlur = () => saveIfDirty();
+		activeDocument.addEventListener('visibilitychange', onVis);
+		window.addEventListener('blur', onBlur);
+		cleanups.push(() => {
+			activeDocument.removeEventListener('visibilitychange', onVis);
+			window.removeEventListener('blur', onBlur);
+		});
+	}
+
+	return () => cleanups.forEach(fn => fn());
 }
 
 // Crea un bottone con icona Lucide via setIcon.
@@ -296,7 +354,8 @@ export class DrawingEditorView extends ItemView {
 	private embedId = '';
 	private svgPath = '';
 	private sourcePath = '';
-	private saveTimer: ReturnType<typeof setTimeout> | null = null;
+	// Tears down the auto-save timers/listeners (set by setupAutoSave)
+	private autoSaveCleanup: (() => void) | null = null;
 	// Listener per aggiornare la classe dark al cambio bgMode
 	private bgModeListener: ((bgMode: string) => void) | null = null;
 	// ResizeObserver per adattare il canvas al layout reale (inclusa rotazione schermo)
@@ -330,12 +389,15 @@ export class DrawingEditorView extends ItemView {
 	async onOpen() { /* UI costruita in setState */ }
 
 	async onClose() {
+		// Tear down auto-save timers/listeners before the final save
+		this.autoSaveCleanup?.();
+		this.autoSaveCleanup = null;
 		if (this.canvas) {
-			await this.saveSvg();
+			// Final save only if there are unsaved changes (avoids spurious OCR)
+			if (this.canvas.getIsDirty()) await this.saveSvg();
 			this.canvas.destroy();
 			this.canvas = null;
 		}
-		if (this.saveTimer) window.clearTimeout(this.saveTimer);
 		// Deregistra il listener bgMode
 		if (this.bgModeListener) {
 			this.plugin.bgModeListeners.delete(this.bgModeListener);
@@ -381,10 +443,11 @@ export class DrawingEditorView extends ItemView {
 		this.canvas = canvas;
 		this.bgModeListener = bgModeListener;
 
-		// Auto-save debounced (2s after last change)
-		canvas.onChange(() => {
-			if (this.saveTimer) window.clearTimeout(this.saveTimer);
-			this.saveTimer = setTimeout(() => { void this.saveSvg(); }, 2000);
+		// Auto-save: pause-debounce + periodic + on-minimize (Features 4/5/6)
+		this.autoSaveCleanup = setupAutoSave({
+			canvas,
+			plugin: this.plugin,
+			save: () => this.saveSvg(),
 		});
 	}
 
@@ -462,7 +525,8 @@ export class DrawingModal extends Modal {
 	private svgPath: string;
 	private sourcePath: string;
 	private canvas: DrawingCanvas | null = null;
-	private saveTimer: ReturnType<typeof setTimeout> | null = null;
+	// Tears down the auto-save timers/listeners (set by setupAutoSave)
+	private autoSaveCleanup: (() => void) | null = null;
 	// Listener per aggiornare la classe dark al cambio bgMode
 	private bgModeListener: ((bgMode: string) => void) | null = null;
 	// Chiude il modal al resize finestra (evita bug canvas su Windows)
@@ -497,12 +561,15 @@ export class DrawingModal extends Modal {
 			this.resizeHandler = null;
 		}
 		void (async () => {
+			// Tear down auto-save timers/listeners before the final save
+			this.autoSaveCleanup?.();
+			this.autoSaveCleanup = null;
 			if (this.canvas) {
-				await this.saveSvg();
+				// Final save only if there are unsaved changes (avoids spurious OCR)
+				if (this.canvas.getIsDirty()) await this.saveSvg();
 				this.canvas.destroy();
 				this.canvas = null;
 			}
-			if (this.saveTimer) window.clearTimeout(this.saveTimer);
 			// Deregistra il listener bgMode
 			if (this.bgModeListener) {
 				this.plugin.bgModeListeners.delete(this.bgModeListener);
@@ -540,10 +607,11 @@ export class DrawingModal extends Modal {
 		this.canvas = canvas;
 		this.bgModeListener = bgModeListener;
 
-		// Auto-save debounced (2s after last change)
-		canvas.onChange(() => {
-			if (this.saveTimer) window.clearTimeout(this.saveTimer);
-			this.saveTimer = setTimeout(() => { void this.saveSvg(); }, 2000);
+		// Auto-save: pause-debounce + periodic + on-minimize (Features 4/5/6)
+		this.autoSaveCleanup = setupAutoSave({
+			canvas,
+			plugin: this.plugin,
+			save: () => this.saveSvg(),
 		});
 	}
 
