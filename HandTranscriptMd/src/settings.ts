@@ -18,6 +18,12 @@ export interface HandwritingSettings {
 	geminiApiKey: string;         // chiave API Google Gemini per l'OCR
 	debugMode: boolean;           // mostra Notice di debug per eventi IME/touch
 	uiLanguage: string;           // lingua dell'interfaccia impostazioni ('auto' = segue sistema)
+	// Auto-save & OCR settings
+	autoOcrOnSave: boolean;             // run OCR automatically whenever the drawing is saved
+	customOcrPrompt: string;            // optional extra instructions appended to the OCR prompt
+	autoSaveOnMinimize: boolean;        // save automatically when the editor loses focus / is minimized
+	autoSaveIntervalMinutes: number;    // periodic auto-save interval in minutes (0 = disabled)
+	autoSaveAfterPauseSeconds: number;  // auto-save N seconds after the last stroke (0 = disabled)
 }
 
 // Colori predefiniti per le modalità light e dark
@@ -89,6 +95,12 @@ export const DEFAULT_SETTINGS: HandwritingSettings = {
 	geminiApiKey: '',
 	debugMode: false,
 	uiLanguage: 'auto',           // default: segue la lingua di sistema di Obsidian
+	// Auto-save & OCR defaults
+	autoOcrOnSave: true,
+	customOcrPrompt: '',
+	autoSaveOnMinimize: true,
+	autoSaveIntervalMinutes: 5,
+	autoSaveAfterPauseSeconds: 30,
 };
 
 export class HandwritingSettingTab extends PluginSettingTab {
@@ -222,9 +234,69 @@ export class HandwritingSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}));
 
-		// --- Modalità debug (nascosta dall'UI, funzionalità mantenuta) ---
+		// --- Auto-save & OCR ---
+		new Setting(containerEl).setName('Auto-save & OCR').setHeading();
 
-		// --- Riferimento keyword OCR (sezione espandibile) ---
+		new Setting(containerEl)
+			.setName('Auto OCR on save')
+			.setDesc('Run OCR automatically whenever the drawing is saved.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.autoOcrOnSave)
+				.onChange(async (value) => {
+					this.plugin.settings.autoOcrOnSave = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Custom OCR prompt')
+			.setDesc('Optional extra instructions appended to the OCR prompt sent to Gemini.')
+			.addTextArea(area => area
+				.setPlaceholder('e.g. Preserve bullet points and numbered lists exactly.')
+				.setValue(this.plugin.settings.customOcrPrompt)
+				.onChange(async (value) => {
+					this.plugin.settings.customOcrPrompt = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Auto-save on minimize')
+			.setDesc('Save automatically when the drawing editor loses focus or is minimized.')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.autoSaveOnMinimize)
+				.onChange(async (value) => {
+					this.plugin.settings.autoSaveOnMinimize = value;
+					await this.plugin.saveSettings();
+				}));
+
+		new Setting(containerEl)
+			.setName('Auto-save interval (minutes)')
+			.setDesc('Save periodically while the editor is open. 0 = disabled.')
+			.addText(text => text
+				.setValue(String(this.plugin.settings.autoSaveIntervalMinutes))
+				.onChange(async (value) => {
+					const n = parseInt(value);
+					if (!isNaN(n) && n >= 0) {
+						this.plugin.settings.autoSaveIntervalMinutes = n;
+						await this.plugin.saveSettings();
+					}
+				}));
+
+		new Setting(containerEl)
+			.setName('Auto-save after pause (seconds)')
+			.setDesc('Save automatically after the pen has been idle for this many seconds. 0 = disabled.')
+			.addText(text => text
+				.setValue(String(this.plugin.settings.autoSaveAfterPauseSeconds))
+				.onChange(async (value) => {
+					const n = parseInt(value);
+					if (!isNaN(n) && n >= 0) {
+						this.plugin.settings.autoSaveAfterPauseSeconds = n;
+						await this.plugin.saveSettings();
+					}
+				}));
+
+		// --- Debug mode (hidden from UI, functionality preserved) ---
+
+		// --- OCR keyword reference (expandable section) ---
 		// NOTA SVILUPPATORI: se aggiungi una keyword in md-parser.ts, aggiornala anche qui!
 		const details = containerEl.createEl('details', { cls: 'hwm_keyword-ref' });
 		details.createEl('summary', {

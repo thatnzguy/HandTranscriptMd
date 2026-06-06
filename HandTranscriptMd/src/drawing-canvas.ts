@@ -1,9 +1,9 @@
 /* =============================================
-   DrawingCanvas — Motore di disegno su Canvas API
-   Usa curve di Bézier quadratiche (midpoint) per
-   tratti fluidi. Supporta penna e gomma parziale.
-   Undo/redo basato su history di stati completi
-   (funziona sia per disegno che per gomma).
+   DrawingCanvas — Canvas API drawing engine
+   Uses quadratic Bézier (midpoint) curves for
+   smooth strokes. Supports pen and partial eraser.
+   Undo/redo based on full-state history snapshots
+   (works for both drawing and erasing).
    ============================================= */
 
 export interface Point {
@@ -20,10 +20,10 @@ export interface Stroke {
 
 export type DrawMode = 'pen' | 'eraser';
 
-// Spaziatura righe orizzontali — costante condivisa con svg-utils.ts
+// Horizontal line spacing — shared constant with svg-utils.ts
 export const LINE_SPACING = 32;
 
-// Deep copy di un array di Stroke
+// Deep copy of a Stroke array
 function cloneStrokes(strokes: Stroke[]): Stroke[] {
 	return strokes.map(s => ({
 		points: s.points.map(p => ({ ...p })),
@@ -49,9 +49,11 @@ export class DrawingCanvas {
 	// Funziona sia per disegno che per gomma.
 	private history: Stroke[][] = [];
 	private historyIdx = -1;
-	// Flag per sapere se la gomma ha modificato qualcosa durante un drag
+	// Flag to know if the eraser changed anything during a drag
 	private eraserChanged = false;
-	// Callback invocato quando l'altezza del canvas cambia (auto-expand)
+	// Tracks whether the canvas has unsaved changes
+	private isDirty = false;
+	// Callback invoked when the canvas height changes (auto-expand)
 	private resizeCb: (() => void) | null = null;
 
 	// Altezza di default delle settings (usata per reset su clear)
@@ -217,13 +219,20 @@ export class DrawingCanvas {
 	getBgColor(): string { return this.bgColor; }
 	getLineColor(): string { return this.lineColor; }
 
+	// Returns true if the canvas has changes that have not been saved yet
+	getIsDirty(): boolean { return this.isDirty; }
+	// Clears the dirty flag — call this after a successful save
+	markClean(): void { this.isDirty = false; }
+
 	loadStrokes(strokes: Stroke[]) {
 		this.strokes = cloneStrokes(strokes);
-		// Reset history con lo stato caricato
+		// Reset history to the loaded state
 		this.history = [];
 		this.historyIdx = -1;
 		this.pushHistory();
 		this.redraw();
+		// Initial load is a clean state — no unsaved changes
+		this.isDirty = false;
 	}
 
 	// Remap colori di tutti i tratti (correnti + history) al cambio tema.
@@ -239,22 +248,24 @@ export class DrawingCanvas {
 		this.redraw();
 	}
 
-	// Torna allo stato precedente nella history
+	// Returns to the previous state in history
 	undo(): boolean {
 		if (this.historyIdx <= 0) return false;
 		this.historyIdx--;
 		this.strokes = cloneStrokes(this.history[this.historyIdx]!);
 		this.redraw();
+		this.isDirty = true;
 		this.changeCb?.();
 		return true;
 	}
 
-	// Avanza allo stato successivo nella history
+	// Advances to the next state in history
 	redo(): boolean {
 		if (this.historyIdx >= this.history.length - 1) return false;
 		this.historyIdx++;
 		this.strokes = cloneStrokes(this.history[this.historyIdx]!);
 		this.redraw();
+		this.isDirty = true;
 		this.changeCb?.();
 		return true;
 	}
@@ -262,10 +273,11 @@ export class DrawingCanvas {
 	clear() {
 		this.strokes = [];
 		this.pushHistory();
-		// Ridisegna subito (canvas visualmente vuoto) anche se l'altezza
-		// è già quella di default (animateHeight ritornerebbe senza fare nulla)
+		// Redraw immediately (canvas visually empty) even if the height is already
+		// the default (animateHeight would return early without doing anything)
 		this.redraw();
 		this.animateHeight(this.defaultHeight);
+		this.isDirty = true;
 		this.changeCb?.();
 	}
 
@@ -362,14 +374,16 @@ export class DrawingCanvas {
 		if (this.mode === 'pen' && this.currentStroke) {
 			if (this.currentStroke.points.length >= 2) {
 				this.strokes.push(this.currentStroke);
-				// Salva nella history dopo ogni tratto completato
+				// Save to history after each completed stroke
 				this.pushHistory();
+				this.isDirty = true;
 				this.changeCb?.();
 			}
 			this.currentStroke = null;
 		} else if (this.mode === 'eraser' && this.eraserChanged) {
-			// Salva nella history dopo un drag gomma che ha cancellato qualcosa
+			// Save to history after an eraser drag that removed something
 			this.pushHistory();
+			this.isDirty = true;
 			this.changeCb?.();
 		}
 	}
