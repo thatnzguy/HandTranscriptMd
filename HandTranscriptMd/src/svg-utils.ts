@@ -52,17 +52,71 @@ function r(n: number): string {
 	return Math.round(n * 10) / 10 + '';
 }
 
-// Converte array di Stroke in contenuto SVG completo
-// I dati grezzi dei tratti sono dentro <desc> come JSON
-// per permettere il riedit senza perdere informazioni
+// Numeric round to 1 decimal — used for the coordinates stored in the
+// <desc> JSON, so the re-edit data is as compact as the rendered paths.
+function r1(n: number): number {
+	return Math.round(n * 10) / 10;
+}
+
+// Perpendicular distance from point p to the infinite line through a and b.
+function perpendicularDistance(p: Point, a: Point, b: Point): number {
+	const dx = b.x - a.x;
+	const dy = b.y - a.y;
+	const len = Math.hypot(dx, dy);
+	if (len === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+	return Math.abs(dy * p.x - dx * p.y + b.x * a.y - b.y * a.x) / len;
+}
+
+// Ramer–Douglas–Peucker polyline simplification.
+// Removes points that lie within `epsilon` of the line between their
+// neighbours, drastically reducing point count for handwriting strokes
+// with no visible quality loss. Returns a new array.
+export function rdpSimplify(points: Point[], epsilon: number): Point[] {
+	if (points.length <= 2 || epsilon <= 0) return points;
+
+	const first = points[0]!;
+	const last = points[points.length - 1]!;
+	let maxDist = 0;
+	let idx = 0;
+	for (let i = 1; i < points.length - 1; i++) {
+		const d = perpendicularDistance(points[i]!, first, last);
+		if (d > maxDist) { maxDist = d; idx = i; }
+	}
+
+	if (maxDist > epsilon) {
+		const left = rdpSimplify(points.slice(0, idx + 1), epsilon);
+		const right = rdpSimplify(points.slice(idx), epsilon);
+		// Drop the duplicated join point (last of left === first of right)
+		return left.slice(0, -1).concat(right);
+	}
+	return [first, last];
+}
+
+// Epsilon for stroke simplification, in canvas pixels. 0.5 is conservative —
+// it preserves curve smoothness while removing redundant intermediate points.
+const SIMPLIFY_EPSILON = 0.5;
+
+// Converte array di Stroke in contenuto SVG completo.
+// I tratti vengono semplificati (RDP) e i dati grezzi salvati in <desc> come
+// JSON compatto (coordinate arrotondate, campo pressure rimosso) per permettere
+// il riedit mantenendo i file piccoli.
 export function strokesToSvg(
 	strokes: Stroke[], width: number, height: number,
 	bgColor = '#ffffff', lineColor = '#e0e0e0'
 ): string {
 	const paths: string[] = [];
+	// Compact stroke data for the <desc> JSON: simplified points, rounded
+	// coordinates, no pressure field.
+	const serializable: Array<{ points: Array<{ x: number; y: number }>; color: string; width: number }> = [];
 
 	for (const stroke of strokes) {
-		const d = pointsToPathD(stroke.points);
+		const pts = rdpSimplify(stroke.points, SIMPLIFY_EPSILON);
+		serializable.push({
+			points: pts.map(p => ({ x: r1(p.x), y: r1(p.y) })),
+			color: stroke.color,
+			width: stroke.width,
+		});
+		const d = pointsToPathD(pts);
 		if (!d) continue;
 		paths.push(
 			`  <path d="${d}" stroke="${stroke.color}" fill="none" ` +
@@ -70,7 +124,7 @@ export function strokesToSvg(
 		);
 	}
 
-	const strokesJson = JSON.stringify(strokes);
+	const strokesJson = JSON.stringify(serializable);
 
 	// Righe orizzontali (foglio a righe) — stessa spaziatura del canvas
 	const lines: string[] = [];

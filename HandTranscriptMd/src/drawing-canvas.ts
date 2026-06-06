@@ -9,7 +9,10 @@
 export interface Point {
 	x: number;
 	y: number;
-	pressure: number;
+	// Captured from the pointer event but currently unused for rendering.
+	// Optional because it is stripped from the serialized SVG to save space,
+	// so reloaded strokes will not carry it.
+	pressure?: number;
 }
 
 export interface Stroke {
