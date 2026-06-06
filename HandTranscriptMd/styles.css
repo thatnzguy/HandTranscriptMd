@@ -925,37 +925,15 @@
 }
 
 /* =============================================
-   Subtle handwriting transcript callout
-   The transcript exists for full-text search and AI indexing, not for
-   reading — so it is rendered as small, muted, borderless text. Use the
-   "Show transcript" portal button (eye icon) to read it on demand.
+   Hidden handwriting transcript callout
+   The transcript exists only for full-text search and AI indexing — it is
+   never shown under the drawing in any view mode. Use the "Show transcript"
+   portal button (eye icon) to read it on demand via a modal.
+   display:none does not remove the text from the document, so search/AI
+   indexing is unaffected.
    ============================================= */
 .callout[data-callout="hwm-transcript"] {
-	--callout-color: 136, 136, 136;
-	border: none;
-	background: transparent;
-	margin: 0.15em 0;
-	padding: 0;
-	font-size: 0.72em;
-	opacity: 0.5;
-	mix-blend-mode: normal;
-}
-.callout[data-callout="hwm-transcript"]:hover {
-	opacity: 0.8;
-}
-.callout[data-callout="hwm-transcript"] .callout-title {
-	padding: 2px 0;
-	color: var(--text-faint);
-	font-weight: normal;
-	font-size: 0.9em;
-	gap: 4px;
-}
-.callout[data-callout="hwm-transcript"] .callout-icon {
 	display: none;
-}
-.callout[data-callout="hwm-transcript"] .callout-content {
-	padding: 0 0 0 0.6em;
-	color: var(--text-muted);
 }
 
 /* Transcript modal (opened by the "Show transcript" portal button) */
