@@ -8,10 +8,8 @@
 import { ItemView, WorkspaceLeaf, TFile, Notice, Platform, Modal, App, MarkdownView, setIcon, ViewStateResult } from 'obsidian';
 import type HandwritingPlugin from './main';
 import { DrawingCanvas, Stroke } from './drawing-canvas';
-import { strokesToSvg, parseSvgStrokes, svgToBase64Png, archiveSvgFile } from './svg-utils';
+import { strokesToSvg, parseSvgStrokes } from './svg-utils';
 import { getEffectiveBgColor, getEffectiveLineColor, remapStrokeColor, LIGHT_COLORS, DARK_COLORS, resolveIsDark, BgMode } from './settings';
-import { getRecognizer } from './recognizer';
-import { parseHandwritingToMarkdown } from './md-parser';
 import { t, type I18nKey } from './i18n';
 
 export const VIEW_TYPE_HANDWRITING = 'handwriting-editor';
@@ -180,7 +178,6 @@ async function buildEditorUI(opts: {
 	onClose: () => void | Promise<void>;
 	afterCanvas: (canvas: DrawingCanvas, scrollWrap: HTMLElement, canvasWidth: number) => void;
 	doSave: () => Promise<void>;
-	doConvert: () => Promise<void>;
 	doDelete: () => Promise<void>;
 }): Promise<{ canvas: DrawingCanvas; bgModeListener: (bgMode: string) => void }> {
 	const { el, plugin } = opts;
@@ -233,9 +230,7 @@ async function buildEditorUI(opts: {
 	clearBtn.classList.add('hwm_clear-btn');
 	toolbar.createDiv({ cls: 'hwm_separator' });
 
-	// Converti / Salva / Elimina
-	const convertBtn = mkBtn(toolbar, 'file-text', 'btn_convert');
-	convertBtn.classList.add('hwm_convert-btn');
+	// Salva / Elimina
 	const saveBtn    = mkBtn(toolbar, 'save', 'btn_save');
 	saveBtn.classList.add('hwm_save-btn');
 	const deleteBtn  = mkBtn(toolbar, 'file-x', 'btn_delete');
@@ -337,7 +332,6 @@ async function buildEditorUI(opts: {
 	undoBtn.addEventListener('click', () => cv.undo());
 	redoBtn.addEventListener('click', () => cv.redo());
 	clearBtn.addEventListener('click', () => cv.clear());
-	convertBtn.addEventListener('click', () => { void opts.doConvert(); });
 	saveBtn.addEventListener('click', () => { void opts.doSave().then(() => new Notice(t('notice_saved'))); });
 	deleteBtn.addEventListener('click', () => { void opts.doDelete(); });
 
@@ -436,7 +430,6 @@ export class DrawingEditorView extends ItemView {
 				this.displayRo.observe(el);
 			},
 			doSave: () => this.saveSvg(),
-			doConvert: () => this.doConvert(),
 			doDelete: () => this.doDelete(),
 		});
 
@@ -454,38 +447,6 @@ export class DrawingEditorView extends ItemView {
 	private async saveSvg() {
 		if (!this.canvas) return;
 		await saveSvgToDisk(this.canvas, this.svgPath, this.embedId, this.plugin);
-	}
-
-	private async doConvert() {
-		if (!this.canvas || this.canvas.getStrokes().length === 0) {
-			new Notice(t('error_no_strokes')); return;
-		}
-		// Overlay a tutto schermo sull'editor: spinner + blocco interazione
-		const overlay = this.contentEl.createDiv({ cls: 'hwm_confirm-overlay hwm_convert-overlay--editor' });
-		overlay.createDiv({ cls: 'hwm_spinner' });
-		try {
-			const svg = strokesToSvg(this.canvas.getStrokes(), this.canvas.getWidth(),
-				this.canvas.getHeight(), this.canvas.getBgColor(), this.canvas.getLineColor());
-			const svgEl  = new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement as unknown as SVGElement;
-			const base64 = await svgToBase64Png(svgEl);
-			const recognizer = getRecognizer(this.plugin.settings.geminiApiKey, this.plugin.settings.ocrLanguages, this.plugin.settings.customOcrPrompt);
-			const rawText = await recognizer.recognize(base64);
-			if (!rawText.trim()) throw new Error(t('error_no_text'));
-			const markdown = parseHandwritingToMarkdown(rawText);
-			await archiveSvgFile(this.svgPath, this.plugin);
-			await replaceInMdFile(this.sourcePath, this.svgPath, this.embedId, '\n' + markdown + '\n', this.plugin);
-			overlay.remove();
-			this.canvas.destroy(); this.canvas = null;
-			this.leaf.detach();
-			new Notice(t('notice_converted'));
-		} catch (e: unknown) {
-			// Errore: sostituisce lo spinner con messaggio + OK
-			overlay.empty();
-			const msg = e instanceof Error ? e.message : String(e);
-			overlay.createEl('p', { text: msg, cls: 'hwm_convert-error-msg' });
-			const okBtn = overlay.createEl('button', { text: 'OK', cls: 'hwm_convert-ok-btn mod-warning' });
-			okBtn.addEventListener('click', () => overlay.remove(), { once: true });
-		}
 	}
 
 	// Overlay di conferma inline (come DrawingModal) — evita window.confirm() che
@@ -600,7 +561,6 @@ export class DrawingModal extends Modal {
 				});
 			},
 			doSave: () => this.saveSvg(),
-			doConvert: () => this.doConvert(),
 			doDelete: () => this.doDelete(),
 		});
 
@@ -618,36 +578,6 @@ export class DrawingModal extends Modal {
 	private async saveSvg() {
 		if (!this.canvas) return;
 		await saveSvgToDisk(this.canvas, this.svgPath, this.embedId, this.plugin);
-	}
-
-	private async doConvert() {
-		if (!this.canvas || this.canvas.getStrokes().length === 0) { new Notice(t('error_no_strokes')); return; }
-		// Overlay a tutto schermo sul modal: spinner + blocco interazione
-		const overlay = this.contentEl.createDiv({ cls: 'hwm_confirm-overlay hwm_convert-overlay--editor' });
-		overlay.createDiv({ cls: 'hwm_spinner' });
-		try {
-			const svg = strokesToSvg(this.canvas.getStrokes(), this.canvas.getWidth(), this.canvas.getHeight(),
-				this.canvas.getBgColor(), this.canvas.getLineColor());
-			const svgEl  = new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement as unknown as SVGElement;
-			const base64 = await svgToBase64Png(svgEl);
-			const recognizer = getRecognizer(this.plugin.settings.geminiApiKey, this.plugin.settings.ocrLanguages, this.plugin.settings.customOcrPrompt);
-			const rawText = await recognizer.recognize(base64);
-			if (!rawText.trim()) throw new Error(t('error_no_text'));
-			const markdown = parseHandwritingToMarkdown(rawText);
-			await archiveSvgFile(this.svgPath, this.plugin);
-			await replaceInMdFile(this.sourcePath, this.svgPath, this.embedId, '\n' + markdown + '\n', this.plugin);
-			overlay.remove();
-			this.canvas.destroy(); this.canvas = null;
-			this.close();
-			new Notice(t('notice_converted'));
-		} catch (e: unknown) {
-			// Errore: sostituisce lo spinner con messaggio + OK
-			overlay.empty();
-			const msg = e instanceof Error ? e.message : String(e);
-			overlay.createEl('p', { text: msg, cls: 'hwm_convert-error-msg' });
-			const okBtn = overlay.createEl('button', { text: 'OK', cls: 'hwm_convert-ok-btn mod-warning' });
-			okBtn.addEventListener('click', () => overlay.remove(), { once: true });
-		}
 	}
 
 	// Overlay di conferma inline: nessun Modal annidato → nessun furto di focus

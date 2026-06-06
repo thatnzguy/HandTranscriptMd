@@ -29,11 +29,10 @@ export default class HandwritingPlugin extends Plugin {
 	// Tracks files currently being modified by auto-OCR to prevent re-entrant processing
 	private processingFiles = new Set<string>();
 
-	// Map embedId → actions (expand/collapse/convert): used by the Obsidian "⋮" menu
+	// Map embedId → actions (expand/collapse/loading): used by the Obsidian "⋮" menu
 	public embedActions = new Map<string, {
 		expand:     () => void;
 		collapse:   () => void;
-		convert:    () => Promise<void>;
 		setLoading: (loading: boolean) => void;
 		container:  HTMLElement;
 		sourcePath: string;
@@ -134,28 +133,11 @@ export default class HandwritingPlugin extends Plugin {
 						this.getActiveEmbeds(file.path).forEach(a => a.collapse());
 					})
 				);
-				menu.addItem(item => item
-					.setTitle(t('menu_convert_all'))
-					.setIcon('file-text')
-					.setSection('danger')
-					.onClick(() => {
-						// Sequential: stops on first error
-						void (async () => {
-							try {
-								for (const actions of this.getActiveEmbeds(file.path)) {
-									await actions.convert();
-								}
-							} catch (e: unknown) {
-								new Notice(t('error_conversion') + (e instanceof Error ? e.message : String(e)));
-							}
-						})();
-					})
-				);
-				// Move the 3 newly added items before the first existing 'danger' item
+				// Move the 2 newly added items before the first existing 'danger' item
 				// (i.e. before "Delete file"), so they appear above it.
 				// Access to non-public internal Menu property: needed for repositioning.
 			const items = (menu as unknown as { items: Array<{ section: string }> }).items;
-				const added = items.splice(items.length - 3, 3);
+				const added = items.splice(items.length - 2, 2);
 				const firstDangerIdx = items.findIndex(i => i.section === 'danger');
 				items.splice(firstDangerIdx >= 0 ? firstDangerIdx : items.length, 0, ...added);
 			})
@@ -165,7 +147,7 @@ export default class HandwritingPlugin extends Plugin {
 	// Returns the active embeds (container in DOM) belonging to the given file.
 	// Removes from the map any embeds whose container is no longer in the DOM.
 	private getActiveEmbeds(filePath: string) {
-		const result: Array<{ expand: () => void; collapse: () => void; convert: () => Promise<void> }> = [];
+		const result: Array<{ expand: () => void; collapse: () => void }> = [];
 		for (const [id, actions] of this.embedActions) {
 			if (!actions.container.isConnected) {
 				this.embedActions.delete(id);

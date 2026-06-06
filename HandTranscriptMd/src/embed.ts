@@ -23,10 +23,9 @@ import {
 import type HandwritingPlugin from './main';
 import { t, type I18nKey } from './i18n';
 import { Stroke } from './drawing-canvas';
-import { strokesToSvg, parseSvgStrokes, generateId, svgToBase64Png, archiveSvgFile } from './svg-utils';
+import { strokesToSvg, parseSvgStrokes, generateId, svgToBase64Png } from './svg-utils';
 import { getEffectiveBgColor, getEffectiveLineColor, remapStrokeColor, BgMode, resolveIsDark } from './settings';
 import { getRecognizer } from './recognizer';
-import { parseHandwritingToMarkdown } from './md-parser';
 import { VIEW_TYPE_HANDWRITING, DrawingEditorView, DrawingModal } from './editor-view';
 
 // Dati JSON salvati dentro il code block ```handwriting (formato legacy)
@@ -284,9 +283,6 @@ function showLegacyPreview(
 	const deleteBtn = createBtn(btnBar, 'file-x', 'btn_delete');
 	deleteBtn.classList.add('hwm_delete-btn');
 
-	const convertBtn = createBtn(btnBar, 'file-text', 'btn_convert');
-	convertBtn.classList.add('hwm_convert-btn');
-
 	const collapseBtn = createBtn(btnBar, 'chevron-up', 'btn_collapse');
 	collapseBtn.classList.add('hwm_collapse-btn');
 
@@ -294,16 +290,11 @@ function showLegacyPreview(
 	const preview = container.createDiv({ cls: 'hwm_inline-preview' });
 	let isExpanded = true;
 
-	let currentSvgContent = svgContent;
-	let currentStrokes = strokes;
-
-	renderPreviewContent(preview, currentSvgContent);
+	renderPreviewContent(preview, svgContent);
 
 	// Callback refresh dalla tab editor
 	plugin.previewCallbacks.set(data.id, (newSvgContent) => {
 		if (!preview.isConnected) return;
-		currentSvgContent = newSvgContent;
-		currentStrokes = parseSvgStrokes(newSvgContent);
 		renderPreviewContent(preview, newSvgContent);
 	});
 
@@ -327,18 +318,6 @@ function showLegacyPreview(
 
 	// Bottone matita portale (fuori da cm-content)
 	createLegacyPortalButton(container, plugin.app, plugin, data.id, data.svg, ctx.sourcePath);
-
-	// Converti
-	convertBtn.addEventListener('click', (e) => {
-		e.stopPropagation();
-		void (async () => {
-			if (!currentSvgContent || currentStrokes.length === 0) {
-				new Notice(t('error_no_strokes'));
-				return;
-			}
-			await doConvert(currentSvgContent, data, ctx, plugin);
-		})();
-	});
 
 	// Elimina
 	deleteBtn.addEventListener('click', (e) => {
@@ -373,59 +352,6 @@ function renderPreviewContent(preview: HTMLElement, svgContent: string | null) {
 /* =============================================
    Pipeline OCR comune (wiki + legacy)
    ============================================= */
-
-// Esegue il riconoscimento OCR su un SVG e restituisce il testo markdown.
-// Lancia eccezione in caso di errore — il chiamante decide se catturarla o propagarla.
-async function runOcrPipeline(svgContent: string, plugin: HandwritingPlugin): Promise<string> {
-	new Notice(t('notice_recognizing'));
-	const svgEl = new DOMParser()
-		.parseFromString(svgContent, 'image/svg+xml')
-		.documentElement as unknown as SVGElement;
-	const base64     = await svgToBase64Png(svgEl);
-	const recognizer = getRecognizer(plugin.settings.geminiApiKey, plugin.settings.ocrLanguages, plugin.settings.customOcrPrompt);
-	const rawText    = await recognizer.recognize(base64);
-	if (!rawText.trim()) throw new Error(t('error_no_text'));
-	// In modalità debug mostra il testo grezzo restituito da Gemini (prima del parsing)
-	if (plugin.settings.debugMode) new Notice(`[DEBUG] Testo grezzo Gemini:\n${rawText}`, 30000);
-	return parseHandwritingToMarkdown(rawText);
-}
-
-/* =============================================
-   Conversione OCR — Nuovo formato wiki
-   ============================================= */
-
-async function doConvertWiki(
-	svgContent: string,
-	svgPath: string,
-	sourcePath: string,
-	plugin: HandwritingPlugin
-) {
-	// Lancia eccezione in caso di errore (il chiamante decide se mostrare Notice o propagare)
-	const markdown = await runOcrPipeline(svgContent, plugin);
-	await archiveSvgFile(svgPath, plugin);
-	await replaceWikiEmbedWithMarkdown(svgPath, markdown, sourcePath, plugin);
-	new Notice(t('notice_converted'));
-}
-
-/* =============================================
-   Conversione OCR — Legacy (code block)
-   ============================================= */
-
-async function doConvert(
-	svgContent: string,
-	data: EmbedData,
-	ctx: MarkdownPostProcessorContext,
-	plugin: HandwritingPlugin
-) {
-	try {
-		const markdown = await runOcrPipeline(svgContent, plugin);
-		await archiveSvgFile(data.svg, plugin);
-		await replaceEmbedWithMarkdown(ctx, data, markdown, plugin);
-		new Notice(t('notice_converted'));
-	} catch (e: unknown) {
-		new Notice(t('error_ocr') + (e instanceof Error ? e.message : String(e)));
-	}
-}
 
 /* =============================================
    File I/O
@@ -567,38 +493,6 @@ async function removeLegacyEmbed(
 }
 
 /* =============================================
-   Sostituisce embed con markdown (conversione OCR)
-   ============================================= */
-
-async function replaceWikiEmbedWithMarkdown(
-	svgPath: string,
-	markdown: string,
-	sourcePath: string,
-	plugin: HandwritingPlugin
-) {
-	const mdFile = plugin.app.vault.getAbstractFileByPath(sourcePath);
-	if (!(mdFile instanceof TFile)) { new Notice(t('error_file_not_found')); return; }
-
-	const content = await plugin.app.vault.read(mdFile);
-	const updated = content.replace(wikiEmbedRegex(svgPath), '\n' + markdown + '\n');
-	if (updated !== content) await plugin.app.vault.modify(mdFile, updated);
-}
-
-async function replaceEmbedWithMarkdown(
-	ctx: MarkdownPostProcessorContext,
-	data: EmbedData,
-	markdown: string,
-	plugin: HandwritingPlugin
-) {
-	const mdFile = plugin.app.vault.getAbstractFileByPath(ctx.sourcePath);
-	if (!(mdFile instanceof TFile)) { new Notice(t('error_file_not_found')); return; }
-
-	const content = await plugin.app.vault.read(mdFile);
-	const updated = content.replace(codeBlockRegex(data.id), '\n' + markdown + '\n');
-	if (updated !== content) await plugin.app.vault.modify(mdFile, updated);
-}
-
-/* =============================================
    Comando: inserisce un nuovo blocco handwriting
    Usa il NUOVO formato ![[svg]]
    ============================================= */
@@ -703,7 +597,6 @@ function createPortalPanel(
 	let isExpanded = true;
 	// Flag per nascondere il pannello quando il modal (Desktop) è aperto
 	let modalOpen = false;
-	let isConverting = false; // true mentre OCR e' in corso (o errore non ancora confermato)
 
 	// position: relative sullo span è gestita dalla regola CSS
 	// .internal-embed[data-hwm-decorated="1"] — non serve inline style.
@@ -769,9 +662,6 @@ function createPortalPanel(
 		if (!text) { new Notice('No transcript yet'); return; }
 		new TranscriptModal(plugin.app, text).open();
 	})(); });
-
-	// --- Bottone converti in Markdown ---
-	const convertBtn = createPanelBtn(panel, 'file-text', 'btn_convert');
 
 	// --- Bottone comprimi/espandi ---
 	// Usa height + overflow:hidden sul container (non max-height sull'<img>):
@@ -884,55 +774,9 @@ function createPortalPanel(
 		collapseBtn.title = t('btn_expand');
 		collapseBtn.setAttribute('data-hwm-key', 'btn_expand');
 	};
-	// Overlay di conversione: spinner mentre OCR e' in corso,
-	// poi errore + OK se Gemini fallisce.
-	// Nasconde il pannello portale (come modalOpen) per bloccare tutti i click.
-	const showConvertOverlay = (): HTMLElement => {
-		// Nasconde il pannello durante OCR: evita click sui bottoni
-		panel.classList.add('hwm_hidden');
-		const overlay = activeDocument.createElement('div');
-		overlay.className = 'hwm_convert-overlay';
-		const spinner = activeDocument.createElement('div');
-		spinner.className = 'hwm_spinner';
-		overlay.appendChild(spinner);
-		container.appendChild(overlay);
-		return overlay;
-	};
-
-	// Rimuove overlay e ripristina la visibilità del pannello portale
-	const removeConvertOverlay = (overlay: HTMLElement) => {
-		overlay.remove();
-		if (container.isConnected) panel.classList.remove('hwm_hidden');
-		isConverting = false;
-	};
-
-	// Avvia la conversione OCR con overlay. Non lancia eccezioni:
-	// gli errori vengono mostrati nell'overlay stesso con pulsante OK.
-	const doConvertAction = async () => {
-		if (isConverting) return; // skip se gia' in corso (usato anche da 'converti tutti')
-		isConverting = true;
-		const overlay = showConvertOverlay();
-		try {
-			const { strokes, svgContent } = await loadSvgData(svgPath, plugin);
-			if (!svgContent || strokes.length === 0) throw new Error(t('error_no_strokes'));
-			await doConvertWiki(svgContent, svgPath, sourcePath, plugin);
-			// Successo: rimuove overlay e ripristina pannello
-			removeConvertOverlay(overlay);
-		} catch (e: unknown) {
-			// Errore: sostituisce lo spinner con messaggio + OK
-			overlay.empty();
-			const msg = e instanceof Error ? e.message : String(e);
-			overlay.createEl('p', { text: msg, cls: 'hwm_convert-error-msg' });
-			const okBtn = overlay.createEl('button', { text: 'OK', cls: 'hwm_convert-ok-btn mod-warning' });
-			// L'overlay resta visibile finche' l'utente non clicca OK
-			okBtn.addEventListener('click', () => removeConvertOverlay(overlay), { once: true });
-		}
-	};
-
 	collapseBtn.addEventListener('click', () => {
 		if (isExpanded) doCollapse(); else doExpand();
 	});
-	convertBtn.addEventListener('click', () => { void doConvertAction(); });
 
 	// Background OCR loading indicator: a small spinner shown in the embed
 	// corner while auto-OCR runs (triggered from main.ts handleSvgSave).
@@ -953,15 +797,15 @@ function createPortalPanel(
 		} else {
 			if (ocrLoadingEl) { ocrLoadingEl.remove(); ocrLoadingEl = null; }
 			// Only restore the panel if it wasn't already hidden for another reason
-			// (modal open, mobile editor tab open, convert overlay).
-			if (!ocrPanelWasHidden && container.isConnected && !modalOpen && !isConverting) {
+			// (modal open, mobile editor tab open).
+			if (!ocrPanelWasHidden && container.isConnected && !modalOpen) {
 				panel.classList.remove('hwm_hidden');
 			}
 		}
 	};
 
 	// Registra le azioni nel plugin per il menu "⋮ Espandi/Collassa/Converti tutti"
-	plugin.embedActions.set(embedId, { expand: doExpand, collapse: doCollapse, convert: doConvertAction, setLoading, container, sourcePath });
+	plugin.embedActions.set(embedId, { expand: doExpand, collapse: doCollapse, setLoading, container, sourcePath });
 	plugin.register(() => plugin.embedActions.delete(embedId));
 
 	// Layout-change: su Mobile nasconde il pannello quando la tab editor è aperta
@@ -1120,9 +964,9 @@ function createBtn(parent: HTMLElement, icon: string, key: I18nKey): HTMLElement
    ============================================= */
 
 /**
- * Like runOcrPipeline() but returns raw Gemini text without markdown parsing.
+ * Runs OCR on an SVG and returns the raw Gemini text (no markdown parsing).
  * Runs silently — no Notice is shown. Returns empty string instead of throwing
- * when no text is recognized.
+ * when no text is recognized. Used by the auto-OCR transcript path.
  */
 export async function runOcrRaw(svgContent: string, plugin: HandwritingPlugin): Promise<string> {
 	try {

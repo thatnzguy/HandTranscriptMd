@@ -5,8 +5,6 @@
    per poter ricaricare e rieditare il disegno.
    ============================================= */
 
-import { TFile } from 'obsidian';
-import type HandwritingPlugin from './main';
 import { Point, Stroke, LINE_SPACING } from './drawing-canvas';
 
 // Genera ID univoco per nuovi disegni nel formato HTMD_YYYYMMDDHHMMSS_XXXX
@@ -206,21 +204,4 @@ export function svgToBase64Png(svgElement: SVGElement): Promise<string> {
 		img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('SVG → PNG fallito')); };
 		img.src = url;
 	});
-}
-
-// Sposta il file SVG nella cartella _converted con nome timestamp.
-// Chiamata dopo la conversione OCR riuscita (embed.ts e editor-view.ts).
-export async function archiveSvgFile(svgPath: string, plugin: HandwritingPlugin): Promise<void> {
-	const svgFile = plugin.app.vault.getAbstractFileByPath(svgPath);
-	if (!(svgFile instanceof TFile)) return;
-
-	const now = new Date();
-	const p = (n: number) => String(n).padStart(2, '0');
-	const ts = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}` +
-		`_${p(now.getHours())}-${p(now.getMinutes())}-${p(now.getSeconds())}`;
-	const destFolder = `${plugin.settings.svgFolder}/_converted`;
-	if (!plugin.app.vault.getAbstractFileByPath(destFolder)) {
-		await plugin.app.vault.createFolder(destFolder);
-	}
-	await plugin.app.vault.rename(svgFile, `${destFolder}/${ts}.svg`);
 }
