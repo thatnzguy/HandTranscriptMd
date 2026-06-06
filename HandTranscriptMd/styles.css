@@ -964,3 +964,28 @@
 	line-height: 1.5;
 	margin: 0;
 }
+
+/* =============================================
+   Background OCR loading indicator
+   Small spinner shown in the embed corner while auto-OCR runs in the
+   background (handleSvgSave). The decorated embed span is position:relative,
+   so this anchors to its top-right like the portal panel.
+   ============================================= */
+.hwm_ocr-loading {
+	position: absolute;
+	top: 6px;
+	right: 6px;
+	z-index: 50;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 4px;
+	background: rgba(0, 0, 0, 0.35);
+	border-radius: 6px;
+	pointer-events: none;
+}
+.hwm_spinner--sm {
+	width: 18px;
+	height: 18px;
+	border-width: 2px;
+}

@@ -34,6 +34,7 @@ export default class HandwritingPlugin extends Plugin {
 		expand:     () => void;
 		collapse:   () => void;
 		convert:    () => Promise<void>;
+		setLoading: (loading: boolean) => void;
 		container:  HTMLElement;
 		sourcePath: string;
 	}>();
@@ -186,11 +187,15 @@ export default class HandwritingPlugin extends Plugin {
 		if (this.processingFiles.has(svgFile.path)) return;
 
 		this.processingFiles.add(svgFile.path);
+		// Show a loading spinner on every embed that references this SVG
+		const loadingActions = this.findEmbedActionsForSvg(svgFile.path);
 		try {
 			const svgContent = await this.app.vault.read(svgFile);
 
 			// Skip empty drawings — no strokes means nothing to transcribe
 			if (parseSvgStrokes(svgContent).length === 0) return;
+
+			loadingActions.forEach(a => a.setLoading(true));
 
 			const ocrText = await runOcrRaw(svgContent, this);
 			if (!ocrText) return;
@@ -216,8 +221,21 @@ export default class HandwritingPlugin extends Plugin {
 			}
 			if (count > 0) new Notice(`Handwriting transcript updated`);
 		} finally {
+			loadingActions.forEach(a => a.setLoading(false));
 			this.processingFiles.delete(svgFile.path);
 		}
+	}
+
+	/** Returns the registered portal-panel actions for every embed of svgPath. */
+	private findEmbedActionsForSvg(svgPath: string) {
+		const result: Array<{ setLoading: (loading: boolean) => void }> = [];
+		for (const [embedId, path] of this.embedPaths) {
+			if (path === svgPath) {
+				const actions = this.embedActions.get(embedId);
+				if (actions) result.push(actions);
+			}
+		}
+		return result;
 	}
 
 	/** Returns all markdown TFiles whose resolved links include svgPath. */

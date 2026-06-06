@@ -862,8 +862,34 @@ function createPortalPanel(
 	});
 	convertBtn.addEventListener('click', () => { void doConvertAction(); });
 
+	// Background OCR loading indicator: a small spinner shown in the embed
+	// corner while auto-OCR runs (triggered from main.ts handleSvgSave).
+	// Hides the portal panel while active and restores its previous state after.
+	let ocrLoadingEl: HTMLElement | null = null;
+	let ocrPanelWasHidden = false;
+	const setLoading = (loading: boolean) => {
+		if (loading) {
+			if (ocrLoadingEl) return;
+			ocrPanelWasHidden = panel.classList.contains('hwm_hidden');
+			panel.classList.add('hwm_hidden');
+			ocrLoadingEl = activeDocument.createElement('div');
+			ocrLoadingEl.className = 'hwm_ocr-loading';
+			const spinner = activeDocument.createElement('div');
+			spinner.className = 'hwm_spinner hwm_spinner--sm';
+			ocrLoadingEl.appendChild(spinner);
+			container.appendChild(ocrLoadingEl);
+		} else {
+			if (ocrLoadingEl) { ocrLoadingEl.remove(); ocrLoadingEl = null; }
+			// Only restore the panel if it wasn't already hidden for another reason
+			// (modal open, mobile editor tab open, convert overlay).
+			if (!ocrPanelWasHidden && container.isConnected && !modalOpen && !isConverting) {
+				panel.classList.remove('hwm_hidden');
+			}
+		}
+	};
+
 	// Registra le azioni nel plugin per il menu "⋮ Espandi/Collassa/Converti tutti"
-	plugin.embedActions.set(embedId, { expand: doExpand, collapse: doCollapse, convert: doConvertAction, container, sourcePath });
+	plugin.embedActions.set(embedId, { expand: doExpand, collapse: doCollapse, convert: doConvertAction, setLoading, container, sourcePath });
 	plugin.register(() => plugin.embedActions.delete(embedId));
 
 	// Layout-change: su Mobile nasconde il pannello quando la tab editor è aperta
