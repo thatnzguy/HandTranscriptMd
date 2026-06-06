@@ -23,7 +23,10 @@ export interface Stroke {
 
 export type DrawMode = 'pen' | 'eraser';
 
-// Horizontal line spacing — shared constant with svg-utils.ts
+// Background pattern for the drawing canvas
+export type BgPattern = 'lines' | 'blank' | 'dots';
+
+// Default horizontal line/dot spacing — shared with svg-utils.ts
 export const LINE_SPACING = 32;
 
 // Deep copy of a Stroke array
@@ -64,8 +67,8 @@ export class DrawingCanvas {
 	// Altezza di default delle settings (usata per reset su clear)
 	private defaultHeight: number;
 
-	// Righe e sfondo — usa la costante esportata del modulo
-	readonly LINE_SPACING = LINE_SPACING;
+	private bgPattern: BgPattern = 'lines';
+	private lineHeight: number = LINE_SPACING;
 	private bgColor = '#ffffff';
 	private lineColor = '#e0e0e0';
 
@@ -98,7 +101,7 @@ export class DrawingCanvas {
 	// Mantenuto per compatibilità ma sempre 0 (non usiamo centering, solo scaling)
 	private viewOffsetX = 0;
 
-	constructor(container: HTMLElement, width: number, height: number, defaultHeight: number, mobileMode = false, debugFn: ((msg: string) => void) | null = null) {
+	constructor(container: HTMLElement, width: number, height: number, defaultHeight: number, mobileMode = false, debugFn: ((msg: string) => void) | null = null, bgPattern: BgPattern = 'lines', lineHeight = LINE_SPACING) {
 		this.dpr = window.devicePixelRatio || 1;
 		this.worldWidth   = width;
 		this.logicalWidth  = width;
@@ -106,6 +109,8 @@ export class DrawingCanvas {
 		this.defaultHeight = defaultHeight;
 		this.mobileMode = mobileMode;
 		this.debugFn = debugFn;
+		this.bgPattern = bgPattern;
+		this.lineHeight = lineHeight;
 
 		this.canvas = activeDocument.createElement('canvas');
 		this.canvas.classList.add('hwm_canvas');
@@ -234,6 +239,14 @@ export class DrawingCanvas {
 	}
 	getBgColor(): string { return this.bgColor; }
 	getLineColor(): string { return this.lineColor; }
+
+	// Cycles or sets the current background pattern and redraws.
+	setBackgroundPattern(pattern: BgPattern) {
+		this.bgPattern = pattern;
+		this.redraw();
+	}
+	getBackgroundPattern(): BgPattern { return this.bgPattern; }
+	setLineHeight(h: number) { this.lineHeight = h; }
 
 	// Returns true if the canvas has changes that have not been saved yet
 	getIsDirty(): boolean { return this.isDirty; }
@@ -540,13 +553,28 @@ export class DrawingCanvas {
 		this.ctx.fillStyle = this.bgColor;
 		this.ctx.fillRect(0, 0, w, h);
 
-		this.ctx.strokeStyle = this.lineColor;
-		this.ctx.lineWidth = 0.5;
-		for (let y = this.LINE_SPACING; y < h; y += this.LINE_SPACING) {
-			this.ctx.beginPath();
-			this.ctx.moveTo(0, y);
-			this.ctx.lineTo(w, y);
-			this.ctx.stroke();
+		if (this.bgPattern === 'blank') return;
+
+		const sp = this.lineHeight;
+		if (this.bgPattern === 'lines') {
+			this.ctx.strokeStyle = this.lineColor;
+			this.ctx.lineWidth = 0.5;
+			for (let y = sp; y < h; y += sp) {
+				this.ctx.beginPath();
+				this.ctx.moveTo(0, y);
+				this.ctx.lineTo(w, y);
+				this.ctx.stroke();
+			}
+		} else {
+			// dots — filled circles at each grid intersection
+			this.ctx.fillStyle = this.lineColor;
+			for (let y = sp; y < h; y += sp) {
+				for (let x = sp; x < w; x += sp) {
+					this.ctx.beginPath();
+					this.ctx.arc(x, y, 1, 0, Math.PI * 2);
+					this.ctx.fill();
+				}
+			}
 		}
 	}
 

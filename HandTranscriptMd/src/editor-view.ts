@@ -7,8 +7,8 @@
 
 import { ItemView, WorkspaceLeaf, TFile, Notice, Platform, Modal, App, MarkdownView, setIcon, ViewStateResult } from 'obsidian';
 import type HandwritingPlugin from './main';
-import { DrawingCanvas, Stroke } from './drawing-canvas';
-import { strokesToSvg, parseSvgStrokes } from './svg-utils';
+import { DrawingCanvas, Stroke, type BgPattern } from './drawing-canvas';
+import { strokesToSvg, parseSvgStrokes, parseSvgPattern } from './svg-utils';
 import { getEffectiveBgColor, getEffectiveLineColor, remapStrokeColor, LIGHT_COLORS, DARK_COLORS, resolveIsDark, BgMode } from './settings';
 import { t, type I18nKey } from './i18n';
 
@@ -47,11 +47,12 @@ async function replaceInMdFile(
 	if (updated !== content) await plugin.app.vault.modify(mdFile, updated);
 }
 
-// Carica i tratti da un file SVG nel vault. Restituisce anche le dimensioni del viewBox.
+// Loads strokes from an SVG file in the vault. Also returns the viewBox dimensions
+// and the stored per-block background pattern (data-hwm-bg attribute).
 async function loadStrokesFromSvg(
 	svgPath: string,
 	plugin: HandwritingPlugin
-): Promise<{ strokes: Stroke[]; canvasWidth: number | null; canvasHeight: number | null }> {
+): Promise<{ strokes: Stroke[]; canvasWidth: number | null; canvasHeight: number | null; bgPattern: BgPattern | null }> {
 	const file = plugin.app.vault.getAbstractFileByPath(svgPath);
 	if (file instanceof TFile) {
 		const content = await plugin.app.vault.read(file);
@@ -60,12 +61,13 @@ async function loadStrokesFromSvg(
 			strokes: parseSvgStrokes(content),
 			canvasWidth:  m ? parseInt(m[1] ?? '0') : null,
 			canvasHeight: m ? parseInt(m[2] ?? '0') : null,
+			bgPattern: parseSvgPattern(content),
 		};
 	}
-	return { strokes: [], canvasWidth: null, canvasHeight: null };
+	return { strokes: [], canvasWidth: null, canvasHeight: null, bgPattern: null };
 }
 
-// Salva il contenuto SVG del canvas su disco e aggiorna la preview inline.
+// Saves the canvas SVG to disk and refreshes the inline preview.
 async function saveSvgToDisk(
 	canvas: DrawingCanvas,
 	svgPath: string,
@@ -74,7 +76,8 @@ async function saveSvgToDisk(
 ): Promise<void> {
 	const svg = strokesToSvg(
 		canvas.getStrokes(), canvas.getWidth(), canvas.getHeight(),
-		canvas.getBgColor(), canvas.getLineColor()
+		canvas.getBgColor(), canvas.getLineColor(),
+		canvas.getBackgroundPattern(), plugin.settings.lineHeight
 	);
 	const folder = svgPath.substring(0, svgPath.lastIndexOf('/'));
 	if (folder && !plugin.app.vault.getAbstractFileByPath(folder)) {
@@ -287,6 +290,17 @@ async function buildEditorUI(opts: {
 	const deleteBtn  = mkBtn(toolbar, 'file-x', 'btn_delete');
 	deleteBtn.classList.add('hwm_delete-btn');
 
+	// Cycle background: lines → blank → dots → lines (per-block override, persisted on next save).
+	// Icon is updated below after the per-block pattern is loaded from the SVG.
+	const bgPatternOrder: BgPattern[] = ['lines', 'blank', 'dots'];
+	const bgPatternIcons: Record<BgPattern, string> = { lines: 'align-justify', blank: 'square', dots: 'grid-3x3' };
+	const cycleBtn = toolbar.createEl('button', {
+		cls: 'hwm_btn hwm_cycle-bg-btn',
+		attr: { title: 'Cycle background (lines → blank → dots)' }
+	});
+	// Placeholder icon — will be replaced once the per-block pattern is resolved after load
+	setIcon(cycleBtn, 'align-justify');
+
 	// Bottone chiudi (X): posizionato a destra via CSS absolute
 	const closeBtn = mkBtn(topbar, 'x', 'btn_close');
 	closeBtn.classList.add('hwm_close-btn');
@@ -296,18 +310,23 @@ async function buildEditorUI(opts: {
 	const scrollWrap  = el.createDiv({ cls: 'hwm_editor-scroll' });
 	const canvasWrap  = scrollWrap.createDiv({ cls: 'hwm_canvas-wrap' });
 
-	// Carica i tratti dal file SVG
-	const { strokes, canvasWidth: savedW, canvasHeight: savedH } = await loadStrokesFromSvg(opts.svgPath, plugin);
+	// Load strokes and the per-block background pattern from the SVG file
+	const { strokes, canvasWidth: savedW, canvasHeight: savedH, bgPattern: savedPattern } = await loadStrokesFromSvg(opts.svgPath, plugin);
 	const { canvasWidth, canvasHeight } = plugin.settings;
 	// Usa le dimensioni salvate nel viewBox per preservare i tratti di sessioni precedenti più larghe
 	const w = savedW ?? canvasWidth;
 	const h = savedH ?? canvasHeight;
 	const debugFn = plugin.settings.debugMode ? (msg: string) => new Notice(msg, 3000) : null;
 
-	const canvas = new DrawingCanvas(canvasWrap, w, h, canvasHeight, isMobile, debugFn);
+	// Resolve per-block pattern: stored value → global default for new/legacy drawings
+	const blockPattern: BgPattern = savedPattern ?? plugin.settings.bgPattern;
+	// Now that we know the pattern, set the correct icon on the cycle button
+	setIcon(cycleBtn, bgPatternIcons[blockPattern]);
+	cycleBtn.setAttribute('title', `Background: ${blockPattern} — click to cycle`);
+	const canvas = new DrawingCanvas(canvasWrap, w, h, canvasHeight, isMobile, debugFn, blockPattern, plugin.settings.lineHeight);
 	canvas.setBackground(bgColor, lineColor);
 	canvas.setColor(colors[0]!);
-	// Su mobile: dito = scroll manuale del container, penna = disegno
+	// On mobile: finger = manual scroll, stylus = drawing
 	if (isMobile) canvas.allowFingerScroll(scrollWrap);
 
 	// Carica i tratti con remapping colori al tema corrente
@@ -388,6 +407,14 @@ async function buildEditorUI(opts: {
 		cv.clear();
 	})(); });
 	deleteBtn.addEventListener('click', () => { void opts.doDelete(); });
+
+	cycleBtn.addEventListener('click', () => {
+		const current = cv.getBackgroundPattern();
+		const next = bgPatternOrder[(bgPatternOrder.indexOf(current) + 1) % bgPatternOrder.length] ?? 'lines';
+		cv.setBackgroundPattern(next);
+		setIcon(cycleBtn, bgPatternIcons[next]);
+		cycleBtn.setAttribute('title', `Background: ${next} — click to cycle`);
+	});
 
 	return { canvas, bgModeListener };
 }

@@ -5,6 +5,7 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
 import type HandwritingPlugin from './main';
 import { t, setLocale, availableLocales, localeNames } from './i18n';
+import { type BgPattern } from './drawing-canvas';
 
 // Modalità sfondo: chiaro, scuro o automatico (segue il tema di Obsidian)
 export type BgMode = 'light' | 'dark' | 'auto';
@@ -24,6 +25,9 @@ export interface HandwritingSettings {
 	autoSaveOnMinimize: boolean;        // save automatically when the editor loses focus / is minimized
 	autoSaveIntervalMinutes: number;    // periodic auto-save interval in minutes (0 = disabled)
 	autoSaveAfterPauseSeconds: number;  // auto-save N seconds after the last stroke (0 = disabled)
+	// Background pattern & line height (Feature 15)
+	bgPattern: BgPattern;               // default background for new drawings
+	lineHeight: number;                 // grid spacing in pixels (applies globally on next save)
 }
 
 // Colori predefiniti per le modalità light e dark
@@ -101,6 +105,9 @@ export const DEFAULT_SETTINGS: HandwritingSettings = {
 	autoSaveOnMinimize: true,
 	autoSaveIntervalMinutes: 5,
 	autoSaveAfterPauseSeconds: 30,
+	// Background pattern defaults (Feature 15)
+	bgPattern: 'lines' as BgPattern,
+	lineHeight: 32,
 };
 
 export class HandwritingSettingTab extends PluginSettingTab {
@@ -180,6 +187,34 @@ export class HandwritingSettingTab extends PluginSettingTab {
 					const n = parseInt(value);
 					if (!isNaN(n) && n > 50) {
 						this.plugin.settings.canvasHeight = n;
+						await this.plugin.saveSettings();
+					}
+				}));
+
+		// --- Default background pattern (Feature 15) ---
+		new Setting(containerEl)
+			.setName('Default background')
+			.setDesc('Paper style applied to new drawings. Existing drawings keep their own pattern.')
+			.addDropdown(drop => drop
+				.addOption('lines', 'Ruled lines')
+				.addOption('blank', 'Blank')
+				.addOption('dots', 'Dot grid')
+				.setValue(this.plugin.settings.bgPattern)
+				.onChange(async (value) => {
+					this.plugin.settings.bgPattern = value as BgPattern;
+					await this.plugin.saveSettings();
+				}));
+
+		// --- Line height / grid spacing (Feature 15) ---
+		new Setting(containerEl)
+			.setName('Line height (px)')
+			.setDesc('Spacing between ruled lines and dots. Default: 32. Applies on next save.')
+			.addText(text => text
+				.setValue(String(this.plugin.settings.lineHeight))
+				.onChange(async (value) => {
+					const n = parseInt(value, 10);
+					if (!isNaN(n) && n >= 8) {
+						this.plugin.settings.lineHeight = n;
 						await this.plugin.saveSettings();
 					}
 				}));

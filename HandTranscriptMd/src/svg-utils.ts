@@ -5,7 +5,7 @@
    per poter ricaricare e rieditare il disegno.
    ============================================= */
 
-import { Point, Stroke, LINE_SPACING } from './drawing-canvas';
+import { Point, Stroke, LINE_SPACING, type BgPattern } from './drawing-canvas';
 
 // Genera ID univoco per nuovi disegni nel formato HTMD_YYYYMMDDHHMMSS_XXXX
 export function generateId(): string {
@@ -94,13 +94,16 @@ export function rdpSimplify(points: Point[], epsilon: number): Point[] {
 // it preserves curve smoothness while removing redundant intermediate points.
 const SIMPLIFY_EPSILON = 0.5;
 
-// Converte array di Stroke in contenuto SVG completo.
-// I tratti vengono semplificati (RDP) e i dati grezzi salvati in <desc> come
-// JSON compatto (coordinate arrotondate, campo pressure rimosso) per permettere
-// il riedit mantenendo i file piccoli.
+// Converts an array of Stroke objects to a complete SVG string.
+// Strokes are simplified (RDP) and raw data saved in <desc> as compact JSON
+// (rounded coordinates, pressure stripped) for re-editing while keeping files small.
+// pattern and spacing control the background guide marks baked into the SVG so
+// the inline embed matches the editor canvas. The per-block pattern is stored as
+// data-hwm-bg on the root <svg> element so it can be read back on load.
 export function strokesToSvg(
 	strokes: Stroke[], width: number, height: number,
-	bgColor = '#ffffff', lineColor = '#e0e0e0'
+	bgColor = '#ffffff', lineColor = '#e0e0e0',
+	pattern: BgPattern = 'lines', spacing = LINE_SPACING
 ): string {
 	const paths: string[] = [];
 	// Compact stroke data for the <desc> JSON: simplified points, rounded
@@ -124,20 +127,36 @@ export function strokesToSvg(
 
 	const strokesJson = JSON.stringify(serializable);
 
-	// Righe orizzontali (foglio a righe) — stessa spaziatura del canvas
-	const lines: string[] = [];
-	for (let y = LINE_SPACING; y < height; y += LINE_SPACING) {
-		lines.push(`  <line x1="0" y1="${y}" x2="${width}" y2="${y}" stroke="${lineColor}" stroke-width="0.5"/>`);
+	// Background guide marks — matches what DrawingCanvas.clearBackground() draws
+	const bgMarks: string[] = [];
+	if (pattern === 'lines') {
+		for (let y = spacing; y < height; y += spacing) {
+			bgMarks.push(`  <line x1="0" y1="${y}" x2="${width}" y2="${y}" stroke="${lineColor}" stroke-width="0.5"/>`);
+		}
+	} else if (pattern === 'dots') {
+		for (let y = spacing; y < height; y += spacing) {
+			for (let x = spacing; x < width; x += spacing) {
+				bgMarks.push(`  <circle cx="${x}" cy="${y}" r="1" fill="${lineColor}"/>`);
+			}
+		}
 	}
+	// blank: no marks
 
 	return [
-		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">`,
+		`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" data-hwm-bg="${pattern}">`,
 		`  <rect width="100%" height="100%" fill="${bgColor}"/>`,
-		...lines,
+		...bgMarks,
 		`  <desc class="hwm-strokes">${escapeXml(strokesJson)}</desc>`,
 		...paths,
 		`</svg>`
 	].join('\n');
+}
+
+// Reads the per-block background pattern stored as data-hwm-bg on the <svg> root.
+// Returns null for legacy drawings (no attribute), which should fall back to the global default.
+export function parseSvgPattern(svgContent: string): BgPattern | null {
+	const m = svgContent.match(/data-hwm-bg="(lines|blank|dots)"/);
+	return m ? (m[1] as BgPattern) : null;
 }
 
 // Estrae i tratti dal JSON nella <desc> dell'SVG

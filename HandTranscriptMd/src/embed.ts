@@ -23,7 +23,7 @@ import {
 import type HandwritingPlugin from './main';
 import { t, type I18nKey } from './i18n';
 import { Stroke } from './drawing-canvas';
-import { strokesToSvg, parseSvgStrokes, generateId, svgToBase64Png } from './svg-utils';
+import { strokesToSvg, parseSvgStrokes, parseSvgPattern, generateId, svgToBase64Png } from './svg-utils';
 import { getEffectiveBgColor, getEffectiveLineColor, remapStrokeColor, BgMode, resolveIsDark } from './settings';
 import { getRecognizer } from './recognizer';
 import { VIEW_TYPE_HANDWRITING, DrawingEditorView, DrawingModal } from './editor-view';
@@ -61,12 +61,16 @@ export function registerEmbed(plugin: HandwritingPlugin) {
 			const dimMatch = content.match(/viewBox="0 0 (\d+) (\d+)"/);
 			const svgWidth = dimMatch ? parseInt(dimMatch[1]) : plugin.settings.canvasWidth;
 			const svgHeight = dimMatch ? parseInt(dimMatch[2]) : plugin.settings.canvasHeight;
+			// Preserve the per-block pattern stored in the SVG; fall back to the global default
+			const storedPattern = parseSvgPattern(content) ?? plugin.settings.bgPattern;
 			const newSvg = strokesToSvg(
 				remapped,
 				svgWidth,
 				svgHeight,
 				getEffectiveBgColor(plugin.settings),
-				getEffectiveLineColor(plugin.settings)
+				getEffectiveLineColor(plugin.settings),
+				storedPattern,
+				plugin.settings.lineHeight
 			);
 			await plugin.app.vault.modify(file, newSvg);
 			// Aggiorna l'<img> nella preview inline con cache-bust
@@ -514,7 +518,11 @@ export async function insertHandwritingBlock(plugin: HandwritingPlugin) {
 	// non trova nulla da decorare e i bottoni non appaiono.
 	const bgColor = getEffectiveBgColor(plugin.settings);
 	const lineColor = getEffectiveLineColor(plugin.settings);
-	const emptySvg = strokesToSvg([], plugin.settings.canvasWidth, plugin.settings.canvasHeight, bgColor, lineColor);
+	const emptySvg = strokesToSvg(
+		[], plugin.settings.canvasWidth, plugin.settings.canvasHeight,
+		bgColor, lineColor,
+		plugin.settings.bgPattern, plugin.settings.lineHeight
+	);
 
 	const folder = plugin.settings.svgFolder;
 	if (!plugin.app.vault.getAbstractFileByPath(folder)) {
