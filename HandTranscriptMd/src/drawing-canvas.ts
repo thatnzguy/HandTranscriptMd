@@ -259,9 +259,12 @@ export class DrawingCanvas {
 	// Clears the dirty flag — call this after a successful save.
 	// Does NOT clear touchedSinceLoad (that tracks the whole editing session).
 	markClean(): void { this.isDirty = false; }
-	// True if the drawing was changed at all since it was loaded this session.
-	// Used to decide whether to re-run OCR on close (survives auto-save markClean).
+	// True if the drawing changed since it was loaded or since the last OCR.
+	// Used to decide whether to re-run OCR on minimize/close (survives markClean).
 	wasTouched(): boolean { return this.touchedSinceLoad; }
+	// Clears the touched flag after OCR has been triggered, so repeated minimizes
+	// (or a close right after a minimize) don't re-run OCR on unchanged strokes.
+	markOcrDone(): void { this.touchedSinceLoad = false; }
 
 	loadStrokes(strokes: Stroke[]) {
 		this.strokes = cloneStrokes(strokes);

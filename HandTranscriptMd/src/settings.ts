@@ -20,11 +20,9 @@ export interface HandwritingSettings {
 	debugMode: boolean;           // mostra Notice di debug per eventi IME/touch
 	uiLanguage: string;           // lingua dell'interfaccia impostazioni ('auto' = segue sistema)
 	// Auto-save & OCR settings
-	autoOcrOnSave: boolean;             // run OCR automatically whenever the drawing is saved
+	autoOcrOnSave: boolean;             // run OCR on minimize/close (and reconcile missing transcripts on load)
 	customOcrPrompt: string;            // optional extra instructions appended to the OCR prompt
-	autoSaveOnMinimize: boolean;        // save automatically when the editor loses focus / is minimized
-	autoSaveIntervalMinutes: number;    // periodic auto-save interval in minutes (0 = disabled)
-	autoSaveAfterPauseSeconds: number;  // auto-save N seconds after the last stroke (0 = disabled)
+	autoSaveAfterPauseSeconds: number;  // save the SVG N seconds after the last stroke (0 = disabled)
 	// Background pattern & line height (Feature 15)
 	bgPattern: BgPattern;               // default background for new drawings
 	lineHeight: number;                 // grid spacing in pixels (applies globally on next save)
@@ -102,9 +100,7 @@ export const DEFAULT_SETTINGS: HandwritingSettings = {
 	// Auto-save & OCR defaults
 	autoOcrOnSave: true,
 	customOcrPrompt: '',
-	autoSaveOnMinimize: true,
-	autoSaveIntervalMinutes: 5,
-	autoSaveAfterPauseSeconds: 30,
+	autoSaveAfterPauseSeconds: 5,
 	// Background pattern defaults (Feature 15)
 	bgPattern: 'lines' as BgPattern,
 	lineHeight: 32,
@@ -273,8 +269,8 @@ export class HandwritingSettingTab extends PluginSettingTab {
 		new Setting(containerEl).setName('Auto-save & OCR').setHeading();
 
 		new Setting(containerEl)
-			.setName('Auto OCR on save')
-			.setDesc('Run OCR automatically whenever the drawing is saved.')
+			.setName('Auto OCR')
+			.setDesc('Transcribe handwriting automatically (on minimize and when the drawing is closed, and reconcile any missing transcripts on startup). Requires a Gemini API key.')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.autoOcrOnSave)
 				.onChange(async (value) => {
@@ -294,31 +290,8 @@ export class HandwritingSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('Auto-save on minimize')
-			.setDesc('Save automatically when the drawing editor loses focus or is minimized.')
-			.addToggle(toggle => toggle
-				.setValue(this.plugin.settings.autoSaveOnMinimize)
-				.onChange(async (value) => {
-					this.plugin.settings.autoSaveOnMinimize = value;
-					await this.plugin.saveSettings();
-				}));
-
-		new Setting(containerEl)
-			.setName('Auto-save interval (minutes)')
-			.setDesc('Save periodically while the editor is open. 0 = disabled.')
-			.addText(text => text
-				.setValue(String(this.plugin.settings.autoSaveIntervalMinutes))
-				.onChange(async (value) => {
-					const n = parseInt(value, 10);
-					if (!isNaN(n) && n >= 0) {
-						this.plugin.settings.autoSaveIntervalMinutes = n;
-						await this.plugin.saveSettings();
-					}
-				}));
-
-		new Setting(containerEl)
 			.setName('Auto-save after pause (seconds)')
-			.setDesc('Save automatically after the pen has been idle for this many seconds. 0 = disabled.')
+			.setDesc('Save the drawing this many seconds after the pen stops, so work survives a crash. The drawing is also saved on minimize and on close. 0 = only save on minimize/close.')
 			.addText(text => text
 				.setValue(String(this.plugin.settings.autoSaveAfterPauseSeconds))
 				.onChange(async (value) => {

@@ -85,6 +85,12 @@ export default class HandwritingPlugin extends Plugin {
 			})
 		);
 
+		// Crash recovery: once the metadata cache is ready, OCR any drawing that
+		// has strokes but whose note has no transcript yet (e.g. the app crashed
+		// after the SVG was saved but before OCR ran). Idempotent — skips drawings
+		// that already have a transcript.
+		this.app.workspace.onLayoutReady(() => { void this.reconcileMissingTranscripts(); });
+
 		// Register the editor view (dedicated tab for drawing)
 		this.registerView(VIEW_TYPE_HANDWRITING, (leaf) => new DrawingEditorView(leaf, this));
 
@@ -210,6 +216,44 @@ export default class HandwritingPlugin extends Plugin {
 		} finally {
 			loadingActions.forEach(a => a.setLoading(false));
 			this.processingFiles.delete(svgFile.path);
+		}
+	}
+
+	/**
+	 * Crash recovery: scans the SVG folder and runs OCR on any drawing that has
+	 * strokes, is embedded in a note, and has no transcript yet. Runs once on load.
+	 * Idempotent — drawings that already have a transcript are skipped, so this
+	 * does not re-OCR on every startup.
+	 */
+	private async reconcileMissingTranscripts(): Promise<void> {
+		if (!this.settings.autoOcrOnSave) return;
+		if (!this.settings.geminiApiKey.trim()) return;
+		const folder = this.app.vault.getAbstractFileByPath(this.settings.svgFolder);
+		if (!(folder instanceof TFolder)) return;
+
+		for (const f of folder.children) {
+			if (!(f instanceof TFile) || f.extension !== 'svg') continue;
+			if (f.path.includes('/_converted/')) continue;
+			try {
+				const svgContent = await this.app.vault.read(f);
+				if (parseSvgStrokes(svgContent).length === 0) continue;
+
+				const mdFiles = this.findMarkdownFilesEmbedding(f.path);
+				if (mdFiles.length === 0) continue; // not embedded anywhere — nowhere to put a transcript
+
+				// Skip if any embedding note already has a transcript for this drawing
+				let alreadyTranscribed = false;
+				for (const md of mdFiles) {
+					const mdContent = (await this.app.vault.read(md)).replace(/\r\n/g, '\n');
+					if (findTranscript(mdContent, f.path)) { alreadyTranscribed = true; break; }
+				}
+				if (alreadyTranscribed) continue;
+
+				// Missing transcript → OCR it (sequential, so we don't burst the API)
+				await this.handleSvgSave(f);
+			} catch {
+				// Ignore individual failures; reconciliation is best-effort
+			}
 		}
 	}
 

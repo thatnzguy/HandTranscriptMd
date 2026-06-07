@@ -110,48 +110,49 @@ function setupAutoSave(opts: {
 	canvas: DrawingCanvas;
 	plugin: HandwritingPlugin;
 	save: () => Promise<void>;
+	// Runs OCR for this drawing (reads the saved SVG, writes the transcript).
+	ocr: () => void;
 	// Returns true when this editor is the one the user is actively in.
-	// Used to gate the minimize/blur trigger so a backgrounded editor (e.g. a
-	// drawing tab left open while reading another note) does not auto-save.
+	// Used to gate the minimize trigger so a backgrounded editor (e.g. a drawing
+	// tab left open while reading another note) does not save/OCR.
 	isActive?: () => boolean;
 }): () => void {
-	const { canvas, plugin, save, isActive } = opts;
-	const saveIfDirty = () => { if (canvas.getIsDirty()) void save(); };
+	const { canvas, plugin, save, ocr, isActive } = opts;
 	const cleanups: Array<() => void> = [];
 
-	// Feature 6 — auto-save after the pen pauses (debounced on every change).
-	// 0 = disabled. Replaces the previous hard-coded 2s debounce.
+	// Crash-safety save: write the SVG shortly after the pen pauses (configurable
+	// via autoSaveAfterPauseSeconds; 0 = disabled). Saving is cheap and does NOT
+	// trigger OCR — OCR only runs on minimize/close.
 	const pauseMs = plugin.settings.autoSaveAfterPauseSeconds * 1000;
 	let pauseTimer: ReturnType<typeof setTimeout> | null = null;
 	canvas.onChange(() => {
 		if (pauseMs <= 0) return;
 		if (pauseTimer) clearTimeout(pauseTimer);
-		pauseTimer = setTimeout(saveIfDirty, pauseMs);
+		pauseTimer = setTimeout(() => { if (canvas.getIsDirty()) void save(); }, pauseMs);
 	});
 	cleanups.push(() => { if (pauseTimer) clearTimeout(pauseTimer); });
 
-	// Feature 5 — periodic auto-save. 0 = disabled.
-	const intervalMin = plugin.settings.autoSaveIntervalMinutes;
-	if (intervalMin > 0) {
-		const id = window.setInterval(saveIfDirty, intervalMin * 60 * 1000);
-		cleanups.push(() => window.clearInterval(id));
-	}
-
-	// Feature 4 — auto-save on minimize / loss of focus.
-	// visibilitychange covers app backgrounding (key on Android); blur covers
-	// desktop window/focus loss. Only fires when this editor is the active view,
-	// so minimizing while reading a note (editor tab in background) won't save.
-	if (plugin.settings.autoSaveOnMinimize) {
-		const activeNow = () => !isActive || isActive();
-		const onVis = () => { if (activeDocument.visibilityState === 'hidden' && activeNow()) saveIfDirty(); };
-		const onBlur = () => { if (activeNow()) saveIfDirty(); };
-		activeDocument.addEventListener('visibilitychange', onVis);
-		window.addEventListener('blur', onBlur);
-		cleanups.push(() => {
-			activeDocument.removeEventListener('visibilitychange', onVis);
-			window.removeEventListener('blur', onBlur);
-		});
-	}
+	// On minimize / focus loss: save the SVG, then run OCR if the drawing changed
+	// since the last OCR. visibilitychange covers app backgrounding (key on mobile);
+	// blur covers desktop window/focus loss. Only when this editor is the active view.
+	const activeNow = () => !isActive || isActive();
+	const onMinimize = () => {
+		if (!activeNow()) return;
+		void (async () => {
+			if (canvas.getIsDirty()) await save();
+			if (canvas.wasTouched()) {
+				canvas.markOcrDone(); // reset first so repeated minimizes don't re-OCR
+				ocr();
+			}
+		})();
+	};
+	const onVis = () => { if (activeDocument.visibilityState === 'hidden') onMinimize(); };
+	activeDocument.addEventListener('visibilitychange', onVis);
+	window.addEventListener('blur', onMinimize);
+	cleanups.push(() => {
+		activeDocument.removeEventListener('visibilitychange', onVis);
+		window.removeEventListener('blur', onMinimize);
+	});
 
 	return () => cleanups.forEach(fn => fn());
 }
@@ -526,6 +527,7 @@ export class DrawingEditorView extends ItemView {
 			canvas,
 			plugin: this.plugin,
 			save: () => this.saveSvg(),
+			ocr: () => triggerAutoOcr(this.plugin, this.svgPath),
 			isActive: () => this.app.workspace.activeLeaf === this.leaf,
 		});
 	}
@@ -663,6 +665,7 @@ export class DrawingModal extends Modal {
 			canvas,
 			plugin: this.plugin,
 			save: () => this.saveSvg(),
+			ocr: () => triggerAutoOcr(this.plugin, this.svgPath),
 		});
 	}
 
